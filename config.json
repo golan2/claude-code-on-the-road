@@ -1,0 +1,7 @@
+{
+  "watchFolder": "/Users/izikgolan/Library/CloudStorage/GoogleDrive-izik.golan@imubit.com/My Drive/claude-code-on-the-road",
+  "pollIntervalSeconds": 5,
+  "timeoutMinutes": 10,
+  "permissionMode": "bypassPermissions",
+  "maxConcurrentSessions": 10
+}

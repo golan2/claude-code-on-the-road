@@ -22,9 +22,6 @@ go.work.sum
 # Env files
 .env
 
-# Local runtime config (contains machine-specific paths)
-config.json
-
 # IDE
 .idea/
 .vscode/
