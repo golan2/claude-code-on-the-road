@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,6 +69,7 @@ func main() {
 	}
 
 	writeStartupMarker(cfg.WatchFolder)
+	syncInstructions(cfg.WatchFolder)
 
 	inFlight := &inFlightSessions{processing: make(map[string]bool)}
 	inFlightExec := &inFlightExecs{processing: make(map[string]bool)}
@@ -106,6 +112,94 @@ func writeStartupMarker(watchFolder string) {
 	if err := os.WriteFile(filepath.Join(watchFolder, startupMarkerFileName), data, 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
+}
+
+// instructionsFileName is used both for the local copy read from the repo
+// root (the working directory GoApp is run from, same convention as
+// config.Load("config.json")) and for the synced copy written into the
+// Drive root folder — never inside any session folder.
+const instructionsFileName = "instructions"
+
+// instructionsVersionPattern matches the "<!-- version: N -->" header that
+// must be the literal first line of the instructions file. GoApp only
+// overwrites the Drive copy when the local file's version is strictly
+// greater than the Drive copy's version, so a stale/old binary can never
+// clobber a newer instructions file already synced by a newer binary
+// running elsewhere. The version is plain content metadata maintained by
+// hand — whoever edits the file's content bumps this number by 1; there is
+// no build-time injection or separate version file.
+var instructionsVersionPattern = regexp.MustCompile(`^<!-- version: (\d+) -->`)
+
+// parseInstructionsVersion extracts the version number from the first line
+// of an instructions file's content. ok is false if the first line doesn't
+// match the expected header format.
+func parseInstructionsVersion(data []byte) (version int, ok bool) {
+	firstLine := data
+	if idx := bytes.IndexByte(data, '\n'); idx != -1 {
+		firstLine = data[:idx]
+	}
+	m := instructionsVersionPattern.FindSubmatch(firstLine)
+	if m == nil {
+		return 0, false
+	}
+	v, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// syncInstructions reads the local instructions file (relative path, same
+// cwd-relative convention config.Load("config.json") already uses) and
+// syncs its content into watchFolder/instructions — the Drive ROOT folder,
+// not any session folder. It always writes to that exact same path via
+// os.WriteFile (never removes and recreates it), so Google Drive Desktop's
+// sync preserves that file's Drive-side identity across restarts.
+//
+// On first run (no Drive copy yet), it creates the file. On later runs, it
+// only overwrites the existing Drive copy if the local file's version
+// header is strictly greater than the Drive copy's — this is the guard
+// against an accidentally-stale binary clobbering a newer instructions file
+// synced by a newer binary. If the local file has no valid version header
+// at all, the sync is skipped entirely and a warning is logged, since there
+// would be no safe way to compare versions.
+func syncInstructions(watchFolder string) {
+	localData, err := os.ReadFile(instructionsFileName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fmt.Errorf("read local %s: %w", instructionsFileName, err))
+		return
+	}
+	localVersion, ok := parseInstructionsVersion(localData)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "WARNING: local %s is missing a leading \"<!-- version: N -->\" header; skipping Drive sync\n", instructionsFileName)
+		return
+	}
+
+	drivePath := filepath.Join(watchFolder, instructionsFileName)
+	driveData, err := os.ReadFile(drivePath)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintln(os.Stderr, fmt.Errorf("read drive %s: %w", instructionsFileName, err))
+			return
+		}
+		if err := os.WriteFile(drivePath, localData, 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
+		fmt.Printf("Synced instructions to Drive root (created, version %d)\n", localVersion)
+		return
+	}
+
+	if driveVersion, ok := parseInstructionsVersion(driveData); ok && driveVersion >= localVersion {
+		fmt.Printf("Instructions in Drive root are already up to date (version %d)\n", driveVersion)
+		return
+	}
+
+	if err := os.WriteFile(drivePath, localData, 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	fmt.Printf("Synced instructions to Drive root (updated to version %d)\n", localVersion)
 }
 
 // recentSessionsCount is how many of the most recently active session folders
