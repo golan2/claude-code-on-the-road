@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"time"
 )
 
 const sessionConfFileName = "__session_conf.json"
@@ -24,6 +25,7 @@ var (
 	requestFilePattern       = regexp.MustCompile(`^(\d{5})_request\.json$`)
 	statusRequestFilePattern = regexp.MustCompile(`^(\d{5})_status_request_(\d{3})\.json$`)
 	execRequestFilePattern   = regexp.MustCompile(`^(\d{5})_exec_request\.json$`)
+	activityFilePattern      = regexp.MustCompile(`^\d{5}_(request|response|ack)\.json$`)
 )
 
 // SessionConf holds the per-session metadata stored in __session_conf.json.
@@ -139,6 +141,103 @@ func NextPendingRequest(sessionFolderPath string) (ordinal string, requestFilePa
 		}
 	}
 	return "", "", false, nil
+}
+
+// LatestActivity returns the modification time of the most recently modified
+// NNNNN_request.json, NNNNN_response.json, or NNNNN_ack.json file directly in
+// sessionFolderPath. ok is false if none of those files are present.
+func LatestActivity(sessionFolderPath string) (latest time.Time, ok bool, err error) {
+	entries, err := os.ReadDir(sessionFolderPath)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("read session folder %s: %w", sessionFolderPath, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !activityFilePattern.MatchString(e.Name()) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if !ok || info.ModTime().After(latest) {
+			latest = info.ModTime()
+			ok = true
+		}
+	}
+	return latest, ok, nil
+}
+
+// RequestOrdinals returns every NNNNN_request.json ordinal present directly in
+// sessionFolderPath, sorted in ascending order.
+func RequestOrdinals(sessionFolderPath string) ([]string, error) {
+	entries, err := os.ReadDir(sessionFolderPath)
+	if err != nil {
+		return nil, fmt.Errorf("read session folder %s: %w", sessionFolderPath, err)
+	}
+	var ordinals []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if m := requestFilePattern.FindStringSubmatch(e.Name()); m != nil {
+			ordinals = append(ordinals, m[1])
+		}
+	}
+	sort.Strings(ordinals)
+	return ordinals, nil
+}
+
+// StuckRequest describes the result of FindStuckRequest for one session folder.
+type StuckRequest struct {
+	Ordinal         string
+	RequestFilePath string
+	Found           bool // true only when exactly the highest-ordinal request is unanswered
+
+	// Anomaly is true when some ordinal other than the highest is also
+	// unanswered, which should never happen given that requests in a session
+	// are processed strictly one at a time in order. When Anomaly is true,
+	// Ordinal/RequestFilePath/Found must not be acted on — the caller should
+	// flag this rather than guess which request to recover.
+	Anomaly    bool
+	Unanswered []string // every unanswered ordinal found, for diagnostics
+}
+
+// FindStuckRequest inspects sessionFolderPath for a request that GoApp appears
+// to have been in the middle of processing when it was last stopped: the
+// highest-ordinal NNNNN_request.json with no matching NNNNN_response.json yet
+// (an NNNNN_ack.json, if present, does not change this — only the response's
+// absence matters).
+func FindStuckRequest(sessionFolderPath string) (StuckRequest, error) {
+	ordinals, err := RequestOrdinals(sessionFolderPath)
+	if err != nil {
+		return StuckRequest{}, err
+	}
+	if len(ordinals) == 0 {
+		return StuckRequest{}, nil
+	}
+
+	var unanswered []string
+	for _, ord := range ordinals {
+		reqPath := filepath.Join(sessionFolderPath, ord+"_request.json")
+		if _, err := os.Stat(ResponsePathFor(reqPath)); errors.Is(err, fs.ErrNotExist) {
+			unanswered = append(unanswered, ord)
+		}
+	}
+	if len(unanswered) == 0 {
+		return StuckRequest{}, nil
+	}
+
+	highest := ordinals[len(ordinals)-1]
+	if len(unanswered) > 1 || unanswered[0] != highest {
+		return StuckRequest{Anomaly: true, Unanswered: unanswered}, nil
+	}
+
+	return StuckRequest{
+		Ordinal:         highest,
+		RequestFilePath: filepath.Join(sessionFolderPath, highest+"_request.json"),
+		Found:           true,
+		Unanswered:      unanswered,
+	}, nil
 }
 
 // ResponsePathFor maps a NNNNN_request.json path to its NNNNN_response.json path.

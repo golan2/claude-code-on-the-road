@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,6 +68,10 @@ func main() {
 	inFlight := &inFlightSessions{processing: make(map[string]bool)}
 	inFlightExec := &inFlightExecs{processing: make(map[string]bool)}
 	sem := make(chan struct{}, cfg.MaxConcurrentSessions)
+
+	printRecentSessions(cfg.WatchFolder)
+	recoverStuckSessions(cfg, inFlight, sem)
+
 	ticker := time.NewTicker(time.Duration(cfg.PollIntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
@@ -100,6 +105,99 @@ func writeStartupMarker(watchFolder string) {
 	}
 	if err := os.WriteFile(filepath.Join(watchFolder, startupMarkerFileName), data, 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+	}
+}
+
+// recentSessionsCount is how many of the most recently active session folders
+// printRecentSessions reports at startup.
+const recentSessionsCount = 3
+
+// printRecentSessions scans every session folder under watchFolder and prints
+// the recentSessionsCount most recently active ones (by the modification time
+// of their most recently modified request/response/ack file) to stdout.
+func printRecentSessions(watchFolder string) {
+	folders, err := session.DiscoverSessionFolders(watchFolder)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+
+	type sessionActivity struct {
+		name   string
+		latest time.Time
+	}
+	var activities []sessionActivity
+	for _, folder := range folders {
+		latest, ok, err := session.LatestActivity(folder)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		activities = append(activities, sessionActivity{name: filepath.Base(folder), latest: latest})
+	}
+
+	sort.Slice(activities, func(i, j int) bool {
+		return activities[i].latest.After(activities[j].latest)
+	})
+	if len(activities) > recentSessionsCount {
+		activities = activities[:recentSessionsCount]
+	}
+
+	if len(activities) == 0 {
+		fmt.Println("Recent sessions: none found")
+		return
+	}
+	fmt.Println("Recent sessions:")
+	for _, a := range activities {
+		fmt.Printf("  %s - last activity %s\n", a.name, a.latest.Format(time.RFC3339))
+	}
+}
+
+// recoverStuckSessions scans every session folder under cfg.WatchFolder for a
+// request left unanswered by a previous run (GoApp killed or crashed
+// mid-processing) and reprocesses it through the normal request-processing
+// path, exactly as if the poller had just discovered it. It dispatches
+// through the same inFlight/sem machinery pollOnce uses, so the first regular
+// poll tick correctly skips any folder already being recovered here.
+func recoverStuckSessions(cfg *config.Config, inFlight *inFlightSessions, sem chan struct{}) {
+	folders, err := session.DiscoverSessionFolders(cfg.WatchFolder)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+
+	for _, folder := range folders {
+		sessionName := filepath.Base(folder)
+
+		stuck, err := session.FindStuckRequest(folder)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			continue
+		}
+		if stuck.Anomaly {
+			fmt.Fprintf(os.Stderr, "WARNING: [%s] unanswered request ordinals %v violate the sequential processing guarantee (expected at most the highest ordinal to be unanswered) — skipping automatic recovery for this session, investigate manually\n", sessionName, stuck.Unanswered)
+			continue
+		}
+		if !stuck.Found {
+			continue
+		}
+
+		fmt.Printf("[%s][request_%s] - stuck from a previous run, reprocessing\n", sessionName, stuck.Ordinal)
+
+		if !inFlight.tryMark(folder) {
+			continue
+		}
+		go func(folder, ordinal, requestFilePath string) {
+			sem <- struct{}{}
+			defer func() {
+				<-sem
+				inFlight.unmark(folder)
+			}()
+			processRequest(cfg, folder, ordinal, requestFilePath)
+		}(folder, stuck.Ordinal, stuck.RequestFilePath)
 	}
 }
 

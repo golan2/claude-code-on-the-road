@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestDiscoverSessionFolders(t *testing.T) {
@@ -240,6 +241,175 @@ func TestPendingExecRequests(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLatestActivity(t *testing.T) {
+	writeAt := func(t *testing.T, dir, name string, modTime time.Time) {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+			t.Fatalf("write fixture file %s: %v", name, err)
+		}
+		if err := os.Chtimes(path, modTime, modTime); err != nil {
+			t.Fatalf("chtimes %s: %v", name, err)
+		}
+	}
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	t.Run("when_request_response_and_ack_files_exist_then_the_latest_modtime_wins", func(t *testing.T) {
+		dir := t.TempDir()
+		writeAt(t, dir, "00001_request.json", base)
+		writeAt(t, dir, "00001_ack.json", base.Add(time.Hour))
+		writeAt(t, dir, "00001_response.json", base.Add(2*time.Hour))
+
+		got, ok, err := LatestActivity(dir)
+		if err != nil {
+			t.Fatalf("LatestActivity returned error: %v", err)
+		}
+		if !ok {
+			t.Fatalf("got ok=false, want true")
+		}
+		if !got.Equal(base.Add(2 * time.Hour)) {
+			t.Fatalf("got %v, want %v", got, base.Add(2*time.Hour))
+		}
+	})
+
+	t.Run("when_exec_and_status_files_exist_then_they_are_ignored", func(t *testing.T) {
+		dir := t.TempDir()
+		writeAt(t, dir, "00001_request.json", base)
+		writeAt(t, dir, "00001_exec_request.json", base.Add(time.Hour))
+		writeAt(t, dir, "00001_exec_response.json", base.Add(2*time.Hour))
+		writeAt(t, dir, "00001_status_request_001.json", base.Add(3*time.Hour))
+		writeAt(t, dir, "00001_status_response_001.json", base.Add(4*time.Hour))
+
+		got, ok, err := LatestActivity(dir)
+		if err != nil {
+			t.Fatalf("LatestActivity returned error: %v", err)
+		}
+		if !ok {
+			t.Fatalf("got ok=false, want true")
+		}
+		if !got.Equal(base) {
+			t.Fatalf("got %v, want %v (exec/status files should not count)", got, base)
+		}
+	})
+
+	t.Run("when_no_matching_files_then_ok_is_false", func(t *testing.T) {
+		dir := t.TempDir()
+		writeAt(t, dir, "00001_exec_request.json", base)
+
+		_, ok, err := LatestActivity(dir)
+		if err != nil {
+			t.Fatalf("LatestActivity returned error: %v", err)
+		}
+		if ok {
+			t.Fatalf("got ok=true, want false")
+		}
+	})
+}
+
+func TestRequestOrdinals(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"00003_request.json", "00001_request.json", "00002_request.json", "00001_response.json", "00001_exec_request.json"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("{}"), 0o644); err != nil {
+			t.Fatalf("write fixture file %s: %v", f, err)
+		}
+	}
+
+	got, err := RequestOrdinals(dir)
+	if err != nil {
+		t.Fatalf("RequestOrdinals returned error: %v", err)
+	}
+	want := []string{"00001", "00002", "00003"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestFindStuckRequest(t *testing.T) {
+	writeFiles := func(t *testing.T, dir string, files []string) {
+		t.Helper()
+		for _, f := range files {
+			if err := os.WriteFile(filepath.Join(dir, f), []byte("{}"), 0o644); err != nil {
+				t.Fatalf("write fixture file %s: %v", f, err)
+			}
+		}
+	}
+
+	t.Run("when_no_request_files_then_not_found", func(t *testing.T) {
+		dir := t.TempDir()
+
+		got, err := FindStuckRequest(dir)
+		if err != nil {
+			t.Fatalf("FindStuckRequest returned error: %v", err)
+		}
+		if got.Found || got.Anomaly {
+			t.Fatalf("got %+v, want Found=false Anomaly=false", got)
+		}
+	})
+
+	t.Run("when_all_requests_are_answered_then_not_found", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFiles(t, dir, []string{"00001_request.json", "00001_response.json", "00002_request.json", "00002_response.json"})
+
+		got, err := FindStuckRequest(dir)
+		if err != nil {
+			t.Fatalf("FindStuckRequest returned error: %v", err)
+		}
+		if got.Found || got.Anomaly {
+			t.Fatalf("got %+v, want Found=false Anomaly=false", got)
+		}
+	})
+
+	t.Run("when_highest_ordinal_request_has_no_response_then_it_is_found_stuck", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFiles(t, dir, []string{"00001_request.json", "00001_response.json", "00001_ack.json", "00002_request.json", "00002_ack.json"})
+
+		got, err := FindStuckRequest(dir)
+		if err != nil {
+			t.Fatalf("FindStuckRequest returned error: %v", err)
+		}
+		if !got.Found || got.Anomaly {
+			t.Fatalf("got %+v, want Found=true Anomaly=false", got)
+		}
+		if got.Ordinal != "00002" {
+			t.Fatalf("got ordinal %q, want 00002", got.Ordinal)
+		}
+		if got.RequestFilePath != filepath.Join(dir, "00002_request.json") {
+			t.Fatalf("got path %q, want %q", got.RequestFilePath, filepath.Join(dir, "00002_request.json"))
+		}
+	})
+
+	t.Run("when_a_lower_ordinal_is_also_unanswered_then_it_is_flagged_as_an_anomaly", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFiles(t, dir, []string{"00001_request.json", "00002_request.json", "00003_request.json"})
+
+		got, err := FindStuckRequest(dir)
+		if err != nil {
+			t.Fatalf("FindStuckRequest returned error: %v", err)
+		}
+		if got.Found || !got.Anomaly {
+			t.Fatalf("got %+v, want Found=false Anomaly=true", got)
+		}
+		want := []string{"00001", "00002", "00003"}
+		if !reflect.DeepEqual(got.Unanswered, want) {
+			t.Fatalf("got Unanswered=%v, want %v", got.Unanswered, want)
+		}
+	})
+
+	t.Run("when_the_unanswered_ordinal_is_not_the_highest_then_it_is_flagged_as_an_anomaly", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFiles(t, dir, []string{"00001_request.json", "00002_request.json", "00002_response.json"})
+
+		got, err := FindStuckRequest(dir)
+		if err != nil {
+			t.Fatalf("FindStuckRequest returned error: %v", err)
+		}
+		if got.Found || !got.Anomaly {
+			t.Fatalf("got %+v, want Found=false Anomaly=true", got)
+		}
+	})
 }
 
 func TestStatusResponsePathFor(t *testing.T) {
