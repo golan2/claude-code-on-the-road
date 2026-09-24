@@ -146,6 +146,14 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		ResumeSessionID: resumeSessionID,
 		Timeout:         time.Duration(cfg.TimeoutMinutes) * time.Minute,
 		Progress:        tracker,
+		OnLaunched: func() {
+			// The subprocess launch succeeded — drop the empty ack marker so
+			// PhoneClaude knows the request was picked up, long before the
+			// final response exists. Content is irrelevant; existence-only.
+			if err := os.WriteFile(session.AckPathFor(requestFilePath), []byte("{}"), 0o644); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		},
 	})
 	finished.Store(true)
 	close(statusDone)

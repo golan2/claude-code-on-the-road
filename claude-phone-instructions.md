@@ -22,6 +22,7 @@ Give each session folder a meaningful name. A session folder can never switch wo
 A session folder contains these files:
 
 - `00001_request.json`, `00002_request.json`, and so on: written by you. Your requests, in order.
+- `00001_ack.json`, `00002_ack.json`, and so on: written by GoApp. Pickup acknowledgements, matching the same ordinal as the request they acknowledge. See the ack-file section below.
 - `00001_response.json`, `00002_response.json`, and so on: written by GoApp. CC's replies, matching the same ordinal as the request they answer.
 - `__session_conf.json`: written by GoApp. Internal session state. Never read, write, or delete this file yourself.
 
@@ -92,6 +93,18 @@ If CC's process for `NNNNN` is still running when GoApp notices `NNNNN_status_re
   - The snapshot is read from GoApp's in-memory buffer, not from any file on disk.
 
 If CC has already finished, or GoApp is at/past the point of writing the final `NNNNN_response.json`, **no `NNNNN_status_response_MMM.json` is written for that `MMM`**. This is by design, not an error. If you sent a status-request and do not see a matching status-response, but you do see `NNNNN_response.json`, treat the request as finished and use the final response.
+
+## Ack files
+
+For every `NNNNN_request.json` it picks up, GoApp writes a marker file:
+
+- `NNNNN_ack.json`: written by GoApp, in the same session folder, with the same ordinal as the request it acknowledges.
+  - GoApp writes it the moment it has successfully launched the Claude Code subprocess for that request — very early, long before the final `NNNNN_response.json` is ready.
+  - What you do not need to care about is the file's content/body — it is an empty `{}`, and only its existence matters. Its existence is the signal that GoApp picked up your request and the subprocess launch succeeded.
+  - This file is only ever written for main `NNNNN_request.json` requests, never for `NNNNN_status_request_MMM.json` status-requests.
+  - If the subprocess launch itself fails, **no ack is written at all** — that case shows up only as `NNNNN_response.json` with outcome `claude_code_error`.
+
+How to read this: if a reasonable amount of time passes after you write a request and no `NNNNN_ack.json` appears at all, something likely went wrong before Claude Code even launched (a malformed request, a bad `workdir`, or another GoApp-side error — which will surface as `NNNNN_response.json` with outcome `claude_code_error`). Once the ack has appeared, a missing `NNNNN_response.json` just means CC is still working normally — use the status-request / status-response protocol above to check on progress.
 
 ## Rules
 

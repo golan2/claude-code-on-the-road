@@ -21,6 +21,7 @@ type InvokeParams struct {
 	ResumeSessionID string           // if non-empty, pass --resume <value>; if empty, brand-new session
 	Timeout         time.Duration    // hard wall-clock limit for the subprocess
 	Progress        *ProgressTracker // optional; updated live as the subprocess streams events
+	OnLaunched      func()           // optional; called synchronously the moment cmd.Start() succeeds
 }
 
 // InvokeResult holds the outcome of a claude CLI invocation.
@@ -126,6 +127,10 @@ func Invoke(params InvokeParams) (*InvokeResult, error) {
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("claudecode: failed to start claude process: %w", err)
+	}
+
+	if params.OnLaunched != nil {
+		params.OnLaunched()
 	}
 
 	var finalLine string

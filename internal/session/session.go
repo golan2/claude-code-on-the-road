@@ -151,6 +151,17 @@ func ResponsePathFor(requestFilePath string) string {
 	return filepath.Join(dir, m[1]+"_response.json")
 }
 
+// AckPathFor maps a NNNNN_request.json path to its NNNNN_ack.json path.
+func AckPathFor(requestFilePath string) string {
+	dir := filepath.Dir(requestFilePath)
+	name := filepath.Base(requestFilePath)
+	m := requestFilePattern.FindStringSubmatch(name)
+	if m == nil {
+		return requestFilePath
+	}
+	return filepath.Join(dir, m[1]+"_ack.json")
+}
+
 // StatusRequestCounters returns all status-request counters for the given ordinal
 // present in sessionFolderPath, sorted in ascending order.
 func StatusRequestCounters(sessionFolderPath, ordinal string) ([]int, error) {

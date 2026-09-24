@@ -142,6 +142,15 @@ func TestStatusRequestCounters(t *testing.T) {
 	}
 }
 
+func TestAckPathFor(t *testing.T) {
+	dir := "/tmp/session"
+	got := AckPathFor(filepath.Join(dir, "00001_request.json"))
+	want := filepath.Join(dir, "00001_ack.json")
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestStatusResponsePathFor(t *testing.T) {
 	dir := "/tmp/session"
 	got := StatusResponsePathFor(dir, "00001", 7)
