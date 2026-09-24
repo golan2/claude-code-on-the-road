@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golan2/claude-code-on-the-road/internal/claudecode"
@@ -97,7 +98,7 @@ func (s *inFlightSessions) unmark(folder string) {
 
 func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string) {
 	sessionName := filepath.Base(folder)
-	fmt.Printf("Request file [%s] for session [%s] sent to Claude Code\n", ordinal, sessionName)
+	fmt.Printf("[%s][request_%s] - sent to Claude Code\n", sessionName, ordinal)
 
 	payload, err := loadRequest(requestFilePath)
 	if err != nil {
@@ -132,6 +133,11 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		resumeSessionID = conf.SessionID
 	}
 
+	tracker := claudecode.NewProgressTracker()
+	midDone := make(chan struct{})
+	var finished atomic.Bool
+	go runMidRequestWatcher(folder, ordinal, &finished, tracker, midDone)
+
 	invokeResult, err := claudecode.Invoke(claudecode.InvokeParams{
 		Prompt:          payload.Prompt,
 		Workdir:         workdir,
@@ -139,7 +145,10 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		AddDir:          folder,
 		ResumeSessionID: resumeSessionID,
 		Timeout:         time.Duration(cfg.TimeoutMinutes) * time.Minute,
+		Progress:        tracker,
 	})
+	finished.Store(true)
+	close(midDone)
 
 	var resp *response.Response
 	if err != nil {
@@ -177,6 +186,62 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	printCompletion(resp.Outcome, ordinal, sessionName)
 }
 
+// midRequestPollIntervalSeconds controls how often the session folder is
+// polled for new NNNNN_mid_request_MMM.json files while a request is in flight.
+const midRequestPollIntervalSeconds = 1
+
+// runMidRequestWatcher polls the session folder for new mid_request marker
+// files for the current ordinal. For each newly discovered counter, it writes a
+// mid_response snapshot from tracker unless the request has already finished.
+func runMidRequestWatcher(
+	sessionFolderPath string,
+	ordinal string,
+	finished *atomic.Bool,
+	tracker *claudecode.ProgressTracker,
+	done <-chan struct{},
+) {
+	ticker := time.NewTicker(midRequestPollIntervalSeconds * time.Second)
+	defer ticker.Stop()
+
+	handled := make(map[int]struct{})
+
+	for {
+		select {
+		case <-ticker.C:
+			counters, err := session.MidRequestCounters(sessionFolderPath, ordinal)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				continue
+			}
+			for _, c := range counters {
+				if _, ok := handled[c]; ok {
+					continue
+				}
+				if finished.Load() {
+					// No mid_responses are written once the claude process has
+					// finished; the final response will be written instead.
+					return
+				}
+				handled[c] = struct{}{}
+				writeMidResponse(session.MidResponsePathFor(sessionFolderPath, ordinal, c), tracker.Snapshot())
+			}
+		case <-done:
+			return
+		}
+	}
+}
+
+func writeMidResponse(path string, p claudecode.Progress) {
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
+}
+
 func loadRequest(path string) (*requestPayload, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -201,16 +266,16 @@ func writeRequestError(requestFilePath, ordinal, sessionName, message string) {
 	if err := response.Write(session.ResponsePathFor(requestFilePath), resp); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
-	fmt.Printf("ERROR: Response file [%s] for session [%s] was written to folder.\n", ordinal, sessionName)
+	fmt.Printf("ERROR: [%s][response_%s] - written to folder\n", sessionName, ordinal)
 }
 
 func printCompletion(outcome, ordinal, sessionName string) {
 	switch outcome {
 	case response.OutcomeSuccess:
-		fmt.Printf("Response file [%s] for session [%s] was written to folder.\n", ordinal, sessionName)
+		fmt.Printf("[%s][response_%s] - written to folder\n", sessionName, ordinal)
 	case response.OutcomeClaudeCodeError:
-		fmt.Printf("ERROR: Response file [%s] for session [%s] was written to folder.\n", ordinal, sessionName)
+		fmt.Printf("ERROR: [%s][response_%s] - written to folder\n", sessionName, ordinal)
 	case response.OutcomeTimeout:
-		fmt.Printf("TIMEOUT: Response file [%s] for session [%s] was written to folder.\n", ordinal, sessionName)
+		fmt.Printf("TIMEOUT: [%s][response_%s] - written to folder\n", sessionName, ordinal)
 	}
 }

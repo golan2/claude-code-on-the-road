@@ -9,11 +9,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 )
 
 const sessionConfFileName = "__session_conf.json"
 
-var requestFilePattern = regexp.MustCompile(`^(\d{5})_request\.json$`)
+var (
+	requestFilePattern    = regexp.MustCompile(`^(\d{5})_request\.json$`)
+	midRequestFilePattern = regexp.MustCompile(`^(\d{5})_mid_request_(\d{3})\.json$`)
+)
 
 // SessionConf holds the per-session metadata stored in __session_conf.json.
 type SessionConf struct {
@@ -130,4 +134,36 @@ func ResponsePathFor(requestFilePath string) string {
 		return requestFilePath
 	}
 	return filepath.Join(dir, m[1]+"_response.json")
+}
+
+// MidRequestCounters returns all mid-request counters for the given ordinal
+// present in sessionFolderPath, sorted in ascending order.
+func MidRequestCounters(sessionFolderPath, ordinal string) ([]int, error) {
+	entries, err := os.ReadDir(sessionFolderPath)
+	if err != nil {
+		return nil, fmt.Errorf("read session folder %s: %w", sessionFolderPath, err)
+	}
+	var counters []int
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		m := midRequestFilePattern.FindStringSubmatch(e.Name())
+		if m == nil || m[1] != ordinal {
+			continue
+		}
+		c, err := strconv.Atoi(m[2])
+		if err != nil {
+			continue // should never happen due to regex
+		}
+		counters = append(counters, c)
+	}
+	sort.Ints(counters)
+	return counters, nil
+}
+
+// MidResponsePathFor returns the path for a mid_response file for the given
+// ordinal and counter within sessionFolderPath.
+func MidResponsePathFor(sessionFolderPath, ordinal string, counter int) string {
+	return filepath.Join(sessionFolderPath, fmt.Sprintf("%s_mid_response_%03d.json", ordinal, counter))
 }
