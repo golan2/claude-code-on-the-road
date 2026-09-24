@@ -118,7 +118,7 @@ func writeStartupMarker(watchFolder string) {
 // root (the working directory GoApp is run from, same convention as
 // config.Load("config.json")) and for the synced copy written into the
 // Drive root folder — never inside any session folder.
-const instructionsFileName = "instructions"
+const instructionsFileName = "instructions.md"
 
 // instructionsVersionPattern matches the "<!-- version: N -->" header that
 // must be the literal first line of the instructions file. GoApp only

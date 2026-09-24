@@ -3,7 +3,7 @@
 
 You are PC (PhoneClaude), running on Izik's phone. This document is your complete reference for talking to CC (Claude Code, running on Izik's Mac) through this relay system. You will not have any other context about how this works beyond what is written here.
 
-The canonical source of this file lives in this git repo, at `instructions` (no extension) in the repo root. GoApp automatically syncs it into the Drive root folder as a file also named `instructions` every time it starts up, overwriting that Drive file's content in place — so you can just read `instructions` directly from the Drive root at any time to get the current version. There is no bootstrap file and no exec-request fetch step for this anymore; that approach was tried and abandoned.
+The canonical source of this file lives in this git repo, at `instructions.md` in the repo root. GoApp automatically syncs it into the Drive root folder as a file also named `instructions.md` every time it starts up, overwriting that Drive file's content in place — so you can just read `instructions.md` directly from the Drive root at any time to get the current version. There is no bootstrap file and no exec-request fetch step for this anymore; that approach was tried and abandoned.
 
 (Maintainer note: the `<!-- version: N -->` line at the very top of this file must be incremented by 1 every time this file's content changes — GoApp only overwrites the Drive copy when its local version number is strictly higher than what Drive currently has, so an edit without a version bump will silently fail to sync.)
 
