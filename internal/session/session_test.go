@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestMidRequestCounters(t *testing.T) {
+func TestStatusRequestCounters(t *testing.T) {
 	tests := []struct {
 		name         string
 		files        []string
@@ -15,11 +15,11 @@ func TestMidRequestCounters(t *testing.T) {
 		want         []int
 	}{
 		{
-			name: "when_mid_requests_exist_for_ordinal_then_returns_sorted_counters",
+			name: "when_status_requests_exist_for_ordinal_then_returns_sorted_counters",
 			files: []string{
-				"00001_mid_request_003.json",
-				"00001_mid_request_001.json",
-				"00001_mid_request_002.json",
+				"00001_status_request_003.json",
+				"00001_status_request_001.json",
+				"00001_status_request_002.json",
 			},
 			queryOrdinal: "00001",
 			want:         []int{1, 2, 3},
@@ -27,7 +27,7 @@ func TestMidRequestCounters(t *testing.T) {
 		{
 			name: "when_querying_different_ordinal_then_returns_empty",
 			files: []string{
-				"00001_mid_request_001.json",
+				"00001_status_request_001.json",
 			},
 			queryOrdinal: "00002",
 			want:         []int{},
@@ -35,12 +35,12 @@ func TestMidRequestCounters(t *testing.T) {
 		{
 			name: "when_files_do_not_match_pattern_then_ignored",
 			files: []string{
-				"00001_mid_request_01.json",
-				"00001_mid_request_1000.json",
+				"00001_status_request_01.json",
+				"00001_status_request_1000.json",
 				"00001_status.json",
 				"00001_request.json",
 				"00001_response.json",
-				"00001_mid_response_001.json",
+				"00001_status_response_001.json",
 			},
 			queryOrdinal: "00001",
 			want:         []int{},
@@ -62,9 +62,9 @@ func TestMidRequestCounters(t *testing.T) {
 				}
 			}
 
-			got, err := MidRequestCounters(dir, tt.queryOrdinal)
+			got, err := StatusRequestCounters(dir, tt.queryOrdinal)
 			if err != nil {
-				t.Fatalf("MidRequestCounters returned error: %v", err)
+				t.Fatalf("StatusRequestCounters returned error: %v", err)
 			}
 			if len(got) == 0 && len(tt.want) == 0 {
 				return
@@ -76,10 +76,10 @@ func TestMidRequestCounters(t *testing.T) {
 	}
 }
 
-func TestMidResponsePathFor(t *testing.T) {
+func TestStatusResponsePathFor(t *testing.T) {
 	dir := "/tmp/session"
-	got := MidResponsePathFor(dir, "00001", 7)
-	want := filepath.Join(dir, "00001_mid_response_007.json")
+	got := StatusResponsePathFor(dir, "00001", 7)
+	want := filepath.Join(dir, "00001_status_response_007.json")
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}

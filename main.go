@@ -134,9 +134,9 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	}
 
 	tracker := claudecode.NewProgressTracker()
-	midDone := make(chan struct{})
+	statusDone := make(chan struct{})
 	var finished atomic.Bool
-	go runMidRequestWatcher(folder, ordinal, &finished, tracker, midDone)
+	go runStatusRequestWatcher(folder, ordinal, &finished, tracker, statusDone)
 
 	invokeResult, err := claudecode.Invoke(claudecode.InvokeParams{
 		Prompt:          payload.Prompt,
@@ -148,7 +148,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		Progress:        tracker,
 	})
 	finished.Store(true)
-	close(midDone)
+	close(statusDone)
 
 	var resp *response.Response
 	if err != nil {
@@ -186,21 +186,21 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	printCompletion(resp.Outcome, ordinal, sessionName)
 }
 
-// midRequestPollIntervalSeconds controls how often the session folder is
-// polled for new NNNNN_mid_request_MMM.json files while a request is in flight.
-const midRequestPollIntervalSeconds = 1
+// statusRequestPollIntervalSeconds controls how often the session folder is
+// polled for new NNNNN_status_request_MMM.json files while a request is in flight.
+const statusRequestPollIntervalSeconds = 1
 
-// runMidRequestWatcher polls the session folder for new mid_request marker
+// runStatusRequestWatcher polls the session folder for new status_request marker
 // files for the current ordinal. For each newly discovered counter, it writes a
-// mid_response snapshot from tracker unless the request has already finished.
-func runMidRequestWatcher(
+// status_response snapshot from tracker unless the request has already finished.
+func runStatusRequestWatcher(
 	sessionFolderPath string,
 	ordinal string,
 	finished *atomic.Bool,
 	tracker *claudecode.ProgressTracker,
 	done <-chan struct{},
 ) {
-	ticker := time.NewTicker(midRequestPollIntervalSeconds * time.Second)
+	ticker := time.NewTicker(statusRequestPollIntervalSeconds * time.Second)
 	defer ticker.Stop()
 
 	handled := make(map[int]struct{})
@@ -208,7 +208,7 @@ func runMidRequestWatcher(
 	for {
 		select {
 		case <-ticker.C:
-			counters, err := session.MidRequestCounters(sessionFolderPath, ordinal)
+			counters, err := session.StatusRequestCounters(sessionFolderPath, ordinal)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				continue
@@ -218,12 +218,12 @@ func runMidRequestWatcher(
 					continue
 				}
 				if finished.Load() {
-					// No mid_responses are written once the claude process has
+					// No status_responses are written once the claude process has
 					// finished; the final response will be written instead.
 					return
 				}
 				handled[c] = struct{}{}
-				writeMidResponse(session.MidResponsePathFor(sessionFolderPath, ordinal, c), tracker.Snapshot())
+				writeStatusResponse(session.StatusResponsePathFor(sessionFolderPath, ordinal, c), tracker.Snapshot())
 			}
 		case <-done:
 			return
@@ -231,7 +231,7 @@ func runMidRequestWatcher(
 	}
 }
 
-func writeMidResponse(path string, p claudecode.Progress) {
+func writeStatusResponse(path string, p claudecode.Progress) {
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
