@@ -36,6 +36,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	writeStartupMarker(cfg.WatchFolder)
+
 	inFlight := &inFlightSessions{processing: make(map[string]bool)}
 	sem := make(chan struct{}, cfg.MaxConcurrentSessions)
 	ticker := time.NewTicker(time.Duration(cfg.PollIntervalSeconds) * time.Second)
@@ -43,6 +45,34 @@ func main() {
 
 	for range ticker.C {
 		pollOnce(cfg, inFlight, sem)
+	}
+}
+
+// startupMarkerFileName is written directly into the watch folder root (not
+// into any session folder) so PhoneClaude and Izik can tell GoApp is alive
+// and see when it last started.
+const startupMarkerFileName = "goapp_started.json"
+
+type startupMarker struct {
+	StartedAt string `json:"startedAt"`
+	PID       int    `json:"pid"`
+}
+
+// writeStartupMarker overwrites startupMarkerFileName in watchFolder with the
+// current startup info. Any previous marker from an earlier run is replaced,
+// since only the most recent start matters.
+func writeStartupMarker(watchFolder string) {
+	marker := startupMarker{
+		StartedAt: time.Now().Format(time.RFC3339),
+		PID:       os.Getpid(),
+	}
+	data, err := json.MarshalIndent(marker, "", "  ")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(watchFolder, startupMarkerFileName), data, 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 	}
 }
 

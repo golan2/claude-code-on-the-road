@@ -13,6 +13,21 @@ My Drive/claude-code-on-the-road
 
 Always use the folder ID directly — never locate the root by searching Drive for the name. If the ID above is missing, stale, or the folder can't be found by ID, stop and ask Izik before falling back to a name search. Drive may contain other folders with the same name outside My Drive (e.g. under Desktop/Documents sync, which surfaces as "My Mac" in Drive) — a name search alone is not reliable.
 
+## GoApp startup marker
+
+Directly in the root `watchFolder` (not inside any session folder), GoApp writes `goapp_started.json` every time it starts up, right before it begins polling.
+
+```json
+{
+  "startedAt": "2026-09-24T12:34:56-07:00",
+  "pid": 12345
+}
+```
+
+`startedAt` is the timestamp of that startup, and `pid` is the OS process ID of that run. If a marker from an earlier run already exists, GoApp simply overwrites it — only the most recent start matters, there is no history.
+
+You can check this file to confirm GoApp is running and see when it last started. It is only written at startup, not continuously, so treat a recent `startedAt` as a good sign but not absolute proof the process hasn't crashed since.
+
 ## Session folders
 
 A session folder is one ongoing Claude Code conversation, permanently tied to one working directory (one repository). You may organize subfolders under the root however you like — GoApp does not care about that structure, only about individual session folders.
