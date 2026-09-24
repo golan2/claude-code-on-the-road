@@ -149,20 +149,59 @@ func parseInstructionsVersion(data []byte) (version int, ok bool) {
 	return v, true
 }
 
+// legacyInstructionsFileNames lists former Drive-root filenames for the
+// synced instructions file (instructions.md was previously named
+// "instructions"). GoApp has no Google Drive API integration — "Drive" here
+// is just a local folder that Google Drive Desktop mirrors in the
+// background, so a Drive file's identity is tied entirely to its local
+// path. A plain os.WriteFile to a path that has never existed before is
+// indistinguishable, from Drive Desktop's point of view, from adding a
+// brand-new unrelated file: it has no way to know "this is the same
+// document, just renamed" unless the rename actually happens as a rename()
+// on the local filesystem it's watching. migrateLegacyInstructionsFile
+// exists to make that real rename happen, so Drive preserves the existing
+// file's identity instead of GoApp accidentally creating an orphaned
+// duplicate. Whenever instructionsFileName changes again in the future,
+// prepend the previous name here so this migration keeps working.
+var legacyInstructionsFileNames = []string{"instructions"}
+
+// migrateLegacyInstructionsFile checks watchFolder for the instructions file
+// under any of its former names and, if found, performs a real os.Rename to
+// newPath (never a delete+create), so Google Drive Desktop's sync mirrors it
+// as a rename and preserves that file's existing Drive file ID.
+func migrateLegacyInstructionsFile(watchFolder, newPath string) {
+	for _, legacyName := range legacyInstructionsFileNames {
+		legacyPath := filepath.Join(watchFolder, legacyName)
+		if _, err := os.Stat(legacyPath); err != nil {
+			continue
+		}
+		if err := os.Rename(legacyPath, newPath); err != nil {
+			fmt.Fprintln(os.Stderr, fmt.Errorf("migrate legacy instructions file %s to %s: %w", legacyPath, newPath, err))
+			continue
+		}
+		fmt.Printf("Migrated Drive instructions file from legacy name %q to %q, preserving its Drive file identity\n", legacyName, instructionsFileName)
+		return
+	}
+}
+
 // syncInstructions reads the local instructions file (relative path, same
 // cwd-relative convention config.Load("config.json") already uses) and
-// syncs its content into watchFolder/instructions — the Drive ROOT folder,
-// not any session folder. It always writes to that exact same path via
-// os.WriteFile (never removes and recreates it), so Google Drive Desktop's
-// sync preserves that file's Drive-side identity across restarts.
+// syncs its content into watchFolder/instructions.md — the Drive ROOT
+// folder, not any session folder. It always writes to that exact same path
+// via os.WriteFile (never removes and recreates it), so Google Drive
+// Desktop's sync preserves that file's Drive-side identity across restarts.
+// If the Drive copy doesn't exist yet at the current name but does exist
+// under a former name, it's migrated in place first (see
+// migrateLegacyInstructionsFile) rather than treated as a fresh create.
 //
-// On first run (no Drive copy yet), it creates the file. On later runs, it
-// only overwrites the existing Drive copy if the local file's version
-// header is strictly greater than the Drive copy's — this is the guard
-// against an accidentally-stale binary clobbering a newer instructions file
-// synced by a newer binary. If the local file has no valid version header
-// at all, the sync is skipped entirely and a warning is logged, since there
-// would be no safe way to compare versions.
+// On first-ever run (no Drive copy under the current or any legacy name),
+// it creates the file. On later runs, it only overwrites the existing Drive
+// copy if the local file's version header is strictly greater than the
+// Drive copy's — this is the guard against an accidentally-stale binary
+// clobbering a newer instructions file synced by a newer binary. If the
+// local file has no valid version header at all, the sync is skipped
+// entirely and a warning is logged, since there would be no safe way to
+// compare versions.
 func syncInstructions(watchFolder string) {
 	localData, err := os.ReadFile(instructionsFileName)
 	if err != nil {
@@ -176,6 +215,10 @@ func syncInstructions(watchFolder string) {
 	}
 
 	drivePath := filepath.Join(watchFolder, instructionsFileName)
+	if _, err := os.Stat(drivePath); errors.Is(err, fs.ErrNotExist) {
+		migrateLegacyInstructionsFile(watchFolder, drivePath)
+	}
+
 	driveData, err := os.ReadFile(drivePath)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
