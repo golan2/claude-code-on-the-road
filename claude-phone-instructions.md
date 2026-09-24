@@ -121,6 +121,51 @@ For every `NNNNN_request.json` it picks up, GoApp writes a marker file:
 
 How to read this: if a reasonable amount of time passes after you write a request and no `NNNNN_ack.json` appears at all, something likely went wrong before Claude Code even launched (a malformed request, a bad `workdir`, or another GoApp-side error — which will surface as `NNNNN_response.json` with outcome `claude_code_error`). Once the ack has appeared, a missing `NNNNN_response.json` just means CC is still working normally — use the status-request / status-response protocol above to check on progress.
 
+## Exec-request / exec-response protocol
+
+For requests that only need a raw shell command run — bypassing Claude Code entirely — write:
+
+- `NNNNN_exec_request.json`: written by you, in the same session folder as regular requests.
+  - `NNNNN` is drawn from the same incrementing ordinal sequence as `NNNNN_request.json`. There is one sequence per session covering every request type; do not keep a separate counter for exec-requests. Pick the next ordinal the same way as always: the highest existing ordinal of any kind (`_request.json` or `_exec_request.json`) in the folder, plus one.
+  - Schema:
+    ```json
+    {
+      "command": "string, required — one full shell command line, exactly as you'd type it in a terminal"
+    }
+    ```
+  - `command` is run through a shell (so pipes, redirects, `&&`, globs, etc. all work as expected), not split into a raw argv array.
+
+GoApp writes back:
+
+- `NNNNN_exec_response.json`:
+  ```json
+  {
+    "exitCode": 0,
+    "output": "merged stdout+stderr, like a terminal would show",
+    "truncated": false
+  }
+  ```
+  - `exitCode` is the command's real exit code (or `-1` if it timed out or could not be launched at all).
+  - `output` merges stdout and stderr into a single string, in the order they were produced, with no separation between the two streams.
+  - `truncated` is `true` if `output` was cut off because it exceeded GoApp's configured cap (a few tens of thousands of characters); `false` otherwise. If it is `true`, treat the tail of the real output as lost.
+  - If the command could not be started at all, or it exceeded the timeout, an additional `error` field explains what happened.
+
+Key differences from regular requests:
+
+- **Not blocked by the Claude Code lock.** Each session folder serializes Claude Code requests one at a time, but exec-requests run independently and immediately — a pending exec-request is picked up and run even while a Claude Code request is in flight in the same session, and multiple exec-requests can run concurrently.
+- **Workdir is inherited, not enforced.** The command starts in the session's fixed workdir (from `__session_conf.json`), but that's just a starting point — it's free to `cd` elsewhere or touch files outside it. Same trust model as Claude Code: fully trusted, no sandboxing.
+- **Same timeout as Claude Code requests.** There's no separate exec timeout setting; it reuses GoApp's one configured timeout.
+- **Gets an ack, same as regular requests.** As soon as GoApp successfully launches the command, it writes `NNNNN_ack.json` — same mechanism, same meaning as for regular requests. If launch fails outright, no ack is written, only the `NNNNN_exec_response.json`.
+- **No status-request support.** The status-request/status-response mid-flight progress protocol is Claude-Code-only; do not send `NNNNN_status_request_MMM.json` for an exec ordinal.
+
+### When you may send an exec-request without asking Izik first
+
+Treat this the same way you'd treat freely using web search or code execution: for **read-only, informational commands you expect to finish in under about a minute** — listing files, checking whether something exists, grepping/searching within a known small scope, `git status`, and the like — just send the exec-request. No need to check in first.
+
+For anything else, always tell Izik the exact command and get his explicit confirmation before sending the exec-request. No exceptions. This includes:
+- Anything destructive or state-changing: deletions, force-pushes, resets, overwrites, moving/renaming files, installs, and similar.
+- Anything you expect could be slow or heavy: searching the entire disk, large recursive operations, and the like.
+
 ## Rules
 
 There is no confirmation gate. CC runs fully trusted and will act on your prompts directly, including side-effecting actions. Be deliberate about what you ask for.

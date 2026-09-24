@@ -23,6 +23,7 @@ const archivedFolderName = "_archived"
 var (
 	requestFilePattern       = regexp.MustCompile(`^(\d{5})_request\.json$`)
 	statusRequestFilePattern = regexp.MustCompile(`^(\d{5})_status_request_(\d{3})\.json$`)
+	execRequestFilePattern   = regexp.MustCompile(`^(\d{5})_exec_request\.json$`)
 )
 
 // SessionConf holds the per-session metadata stored in __session_conf.json.
@@ -151,15 +152,58 @@ func ResponsePathFor(requestFilePath string) string {
 	return filepath.Join(dir, m[1]+"_response.json")
 }
 
-// AckPathFor maps a NNNNN_request.json path to its NNNNN_ack.json path.
-func AckPathFor(requestFilePath string) string {
-	dir := filepath.Dir(requestFilePath)
-	name := filepath.Base(requestFilePath)
-	m := requestFilePattern.FindStringSubmatch(name)
-	if m == nil {
-		return requestFilePath
+// AckPathFor returns the path for the NNNNN_ack.json marker for the given
+// session folder and ordinal.
+func AckPathFor(sessionFolderPath, ordinal string) string {
+	return filepath.Join(sessionFolderPath, ordinal+"_ack.json")
+}
+
+// PendingExecRequest describes a single pending exec-request file.
+type PendingExecRequest struct {
+	Ordinal string
+	Path    string
+}
+
+// PendingExecRequests returns all NNNNN_exec_request.json files in
+// sessionFolderPath that don't yet have a matching NNNNN_exec_response.json,
+// sorted by ascending ordinal.
+func PendingExecRequests(sessionFolderPath string) ([]PendingExecRequest, error) {
+	entries, err := os.ReadDir(sessionFolderPath)
+	if err != nil {
+		return nil, fmt.Errorf("read session folder %s: %w", sessionFolderPath, err)
 	}
-	return filepath.Join(dir, m[1]+"_ack.json")
+
+	var ordinals []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if m := execRequestFilePattern.FindStringSubmatch(e.Name()); m != nil {
+			ordinals = append(ordinals, m[1])
+		}
+	}
+	sort.Strings(ordinals)
+
+	var pending []PendingExecRequest
+	for _, ord := range ordinals {
+		reqPath := filepath.Join(sessionFolderPath, ord+"_exec_request.json")
+		if _, err := os.Stat(ExecResponsePathFor(reqPath)); errors.Is(err, fs.ErrNotExist) {
+			pending = append(pending, PendingExecRequest{Ordinal: ord, Path: reqPath})
+		}
+	}
+	return pending, nil
+}
+
+// ExecResponsePathFor maps a NNNNN_exec_request.json path to its
+// NNNNN_exec_response.json path.
+func ExecResponsePathFor(execRequestFilePath string) string {
+	dir := filepath.Dir(execRequestFilePath)
+	name := filepath.Base(execRequestFilePath)
+	m := execRequestFilePattern.FindStringSubmatch(name)
+	if m == nil {
+		return execRequestFilePath
+	}
+	return filepath.Join(dir, m[1]+"_exec_response.json")
 }
 
 // StatusRequestCounters returns all status-request counters for the given ordinal

@@ -144,10 +144,101 @@ func TestStatusRequestCounters(t *testing.T) {
 
 func TestAckPathFor(t *testing.T) {
 	dir := "/tmp/session"
-	got := AckPathFor(filepath.Join(dir, "00001_request.json"))
+	got := AckPathFor(dir, "00001")
 	want := filepath.Join(dir, "00001_ack.json")
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestExecResponsePathFor(t *testing.T) {
+	dir := "/tmp/session"
+	got := ExecResponsePathFor(filepath.Join(dir, "00001_exec_request.json"))
+	want := filepath.Join(dir, "00001_exec_response.json")
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestPendingExecRequests(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []string
+		want  []PendingExecRequest
+	}{
+		{
+			name: "when_exec_request_has_no_matching_response_then_it_is_returned",
+			files: []string{
+				"00001_exec_request.json",
+			},
+			want: []PendingExecRequest{
+				{Ordinal: "00001", Path: "00001_exec_request.json"},
+			},
+		},
+		{
+			name: "when_exec_request_has_matching_response_then_it_is_not_returned",
+			files: []string{
+				"00001_exec_request.json",
+				"00001_exec_response.json",
+			},
+			want: []PendingExecRequest{},
+		},
+		{
+			name: "when_multiple_pending_exec_requests_then_returned_sorted_by_ordinal",
+			files: []string{
+				"00003_exec_request.json",
+				"00001_exec_request.json",
+				"00002_exec_request.json",
+			},
+			want: []PendingExecRequest{
+				{Ordinal: "00001", Path: "00001_exec_request.json"},
+				{Ordinal: "00002", Path: "00002_exec_request.json"},
+				{Ordinal: "00003", Path: "00003_exec_request.json"},
+			},
+		},
+		{
+			name: "when_only_regular_request_files_exist_then_returns_empty",
+			files: []string{
+				"00001_request.json",
+				"00001_response.json",
+				"00002_request.json",
+			},
+			want: []PendingExecRequest{},
+		},
+		{
+			name:  "when_no_files_then_returns_empty",
+			files: []string{},
+			want:  []PendingExecRequest{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, f := range tt.files {
+				if err := os.WriteFile(filepath.Join(dir, f), []byte("{}"), 0o644); err != nil {
+					t.Fatalf("write fixture file %s: %v", f, err)
+				}
+			}
+
+			got, err := PendingExecRequests(dir)
+			if err != nil {
+				t.Fatalf("PendingExecRequests returned error: %v", err)
+			}
+
+			want := make([]PendingExecRequest, len(tt.want))
+			copy(want, tt.want)
+			for i := range want {
+				want[i].Path = filepath.Join(dir, want[i].Path)
+			}
+
+			if len(got) == 0 && len(want) == 0 {
+				return
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("got %v, want %v", got, want)
+			}
+		})
 	}
 }
 

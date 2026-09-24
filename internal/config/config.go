@@ -11,6 +11,7 @@ const (
 	defaultTimeoutMinutes        = 10
 	defaultPermissionMode        = "bypassPermissions"
 	defaultMaxConcurrentSessions = 10
+	defaultExecOutputMaxChars    = 30000
 )
 
 // Config holds the application configuration loaded from a JSON file.
@@ -20,6 +21,7 @@ type Config struct {
 	TimeoutMinutes        int    `json:"timeoutMinutes"`
 	PermissionMode        string `json:"permissionMode"`
 	MaxConcurrentSessions int    `json:"maxConcurrentSessions"`
+	ExecOutputMaxChars    int    `json:"execOutputMaxChars"`
 }
 
 // Load reads the JSON configuration at path, applies defaults, and validates it.
@@ -55,6 +57,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.MaxConcurrentSessions == 0 {
 		cfg.MaxConcurrentSessions = defaultMaxConcurrentSessions
+	}
+	if cfg.ExecOutputMaxChars == 0 {
+		cfg.ExecOutputMaxChars = defaultExecOutputMaxChars
 	}
 }
 

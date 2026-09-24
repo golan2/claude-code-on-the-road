@@ -13,6 +13,7 @@ import (
 	"github.com/golan2/claude-code-on-the-road/internal/config"
 	"github.com/golan2/claude-code-on-the-road/internal/response"
 	"github.com/golan2/claude-code-on-the-road/internal/session"
+	"github.com/golan2/claude-code-on-the-road/internal/shellexec"
 )
 
 type requestPayload struct {
@@ -29,6 +30,31 @@ type inFlightSessions struct {
 	processing map[string]bool // a set of all in flight sessions folder full-paths
 }
 
+// inFlightExecs keeps track of individual exec-request ordinals that are
+// already being handled, so the same exec-request is not dispatched twice.
+type inFlightExecs struct {
+	mu         sync.Mutex
+	processing map[string]bool // keys are "folder|ordinal"
+}
+
+func (e *inFlightExecs) tryMark(folder, ordinal string) bool {
+	key := folder + "|" + ordinal
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.processing[key] {
+		return false
+	}
+	e.processing[key] = true
+	return true
+}
+
+func (e *inFlightExecs) unmark(folder, ordinal string) {
+	key := folder + "|" + ordinal
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.processing, key)
+}
+
 func main() {
 	cfg, err := config.Load("config.json")
 	if err != nil {
@@ -39,12 +65,13 @@ func main() {
 	writeStartupMarker(cfg.WatchFolder)
 
 	inFlight := &inFlightSessions{processing: make(map[string]bool)}
+	inFlightExec := &inFlightExecs{processing: make(map[string]bool)}
 	sem := make(chan struct{}, cfg.MaxConcurrentSessions)
 	ticker := time.NewTicker(time.Duration(cfg.PollIntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		pollOnce(cfg, inFlight, sem)
+		pollOnce(cfg, inFlight, inFlightExec, sem)
 	}
 }
 
@@ -76,7 +103,7 @@ func writeStartupMarker(watchFolder string) {
 	}
 }
 
-func pollOnce(cfg *config.Config, inFlight *inFlightSessions, sem chan struct{}) {
+func pollOnce(cfg *config.Config, inFlight *inFlightSessions, inFlightExec *inFlightExecs, sem chan struct{}) {
 	folders, err := session.DiscoverSessionFolders(cfg.WatchFolder)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -84,29 +111,39 @@ func pollOnce(cfg *config.Config, inFlight *inFlightSessions, sem chan struct{})
 	}
 
 	for _, folder := range folders {
-		if !inFlight.tryMark(folder) {
-			continue
+		if inFlight.tryMark(folder) {
+			ordinal, requestFilePath, found, err := session.NextPendingRequest(folder)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				inFlight.unmark(folder)
+			} else if !found {
+				inFlight.unmark(folder)
+			} else {
+				go func(folder, ordinal, requestFilePath string) {
+					sem <- struct{}{}
+					defer func() {
+						<-sem
+						inFlight.unmark(folder)
+					}()
+					processRequest(cfg, folder, ordinal, requestFilePath)
+				}(folder, ordinal, requestFilePath)
+			}
 		}
 
-		ordinal, requestFilePath, found, err := session.NextPendingRequest(folder)
+		execRequests, err := session.PendingExecRequests(folder)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			inFlight.unmark(folder)
 			continue
 		}
-		if !found {
-			inFlight.unmark(folder)
-			continue
+		for _, execReq := range execRequests {
+			if !inFlightExec.tryMark(folder, execReq.Ordinal) {
+				continue
+			}
+			go func(folder, ordinal, execRequestFilePath string) {
+				defer inFlightExec.unmark(folder, ordinal)
+				processExecRequest(cfg, folder, ordinal, execRequestFilePath)
+			}(folder, execReq.Ordinal, execReq.Path)
 		}
-
-		go func(folder, ordinal, requestFilePath string) {
-			sem <- struct{}{}
-			defer func() {
-				<-sem
-				inFlight.unmark(folder)
-			}()
-			processRequest(cfg, folder, ordinal, requestFilePath)
-		}(folder, ordinal, requestFilePath)
 	}
 }
 
@@ -180,7 +217,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 			// The subprocess launch succeeded — drop the empty ack marker so
 			// PhoneClaude knows the request was picked up, long before the
 			// final response exists. Content is irrelevant; existence-only.
-			if err := os.WriteFile(session.AckPathFor(requestFilePath), []byte("{}"), 0o644); err != nil {
+			if err := os.WriteFile(session.AckPathFor(folder, ordinal), []byte("{}"), 0o644); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 			}
 		},
@@ -316,4 +353,91 @@ func printCompletion(outcome, ordinal, sessionName string) {
 	case response.OutcomeTimeout:
 		fmt.Printf("TIMEOUT: [%s][response_%s] - written to folder\n", sessionName, ordinal)
 	}
+}
+
+type execRequestPayload struct {
+	Command string `json:"command"`
+}
+
+func loadExecRequest(path string) (*execRequestPayload, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read exec request file: %w", err)
+	}
+
+	var payload execRequestPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, fmt.Errorf("malformed exec request JSON: %w", err)
+	}
+	if payload.Command == "" {
+		return nil, fmt.Errorf("exec request command is missing or empty")
+	}
+	return &payload, nil
+}
+
+func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath string) {
+	sessionName := filepath.Base(folder)
+	fmt.Printf("[%s][exec_%s] - running shell command\n", sessionName, ordinal)
+
+	payload, err := loadExecRequest(execRequestFilePath)
+	if err != nil {
+		writeExecError(execRequestFilePath, ordinal, sessionName, err.Error())
+		return
+	}
+
+	conf, err := session.LoadSessionConf(folder)
+	if err != nil {
+		writeExecError(execRequestFilePath, ordinal, sessionName, fmt.Sprintf("invalid __session_conf.json: %v", err))
+		return
+	}
+	if conf == nil {
+		writeExecError(execRequestFilePath, ordinal, sessionName, "no session configuration found; exec requests require a prior regular request in this session")
+		return
+	}
+
+	result, err := shellexec.Invoke(shellexec.InvokeParams{
+		Command: payload.Command,
+		Workdir: conf.Workdir,
+		Timeout: time.Duration(cfg.TimeoutMinutes) * time.Minute,
+		OnLaunched: func() {
+			// Same ack mechanism as regular requests: drop an empty marker as
+			// soon as the shell command subprocess has launched successfully.
+			if err := os.WriteFile(session.AckPathFor(folder, ordinal), []byte("{}"), 0o644); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		},
+	})
+
+	var resp *response.ExecResponse
+	if err != nil {
+		resp = &response.ExecResponse{
+			ExitCode:  -1,
+			Error:     err.Error(),
+			Truncated: false,
+		}
+	} else {
+		resp = response.BuildExec(result, cfg.ExecOutputMaxChars)
+	}
+
+	if err := response.Write(session.ExecResponsePathFor(execRequestFilePath), resp); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
+
+	if resp.Error != "" {
+		fmt.Printf("ERROR: [%s][exec_response_%s] - %s\n", sessionName, ordinal, resp.Error)
+	} else {
+		fmt.Printf("[%s][exec_response_%s] - written to folder (exit %d)\n", sessionName, ordinal, resp.ExitCode)
+	}
+}
+
+func writeExecError(execRequestFilePath, ordinal, sessionName, message string) {
+	resp := &response.ExecResponse{
+		ExitCode:  -1,
+		Error:     message,
+		Truncated: false,
+	}
+	if err := response.Write(session.ExecResponsePathFor(execRequestFilePath), resp); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
+	fmt.Printf("ERROR: [%s][exec_response_%s] - %s\n", sessionName, ordinal, message)
 }

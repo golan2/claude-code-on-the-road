@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/golan2/claude-code-on-the-road/internal/claudecode"
+	"github.com/golan2/claude-code-on-the-road/internal/shellexec"
 )
 
 const (
@@ -71,8 +72,35 @@ func Build(result *claudecode.InvokeResult) *Response {
 	return resp
 }
 
-func Write(path string, resp *Response) error {
-	data, err := json.MarshalIndent(resp, "", "  ")
+type ExecResponse struct {
+	ExitCode  int    `json:"exitCode"`
+	Output    string `json:"output"`
+	Truncated bool   `json:"truncated"`
+	Error     string `json:"error,omitempty"` // present only when the command could not be launched, or timed out
+}
+
+func BuildExec(result *shellexec.InvokeResult, maxOutputChars int) *ExecResponse {
+	resp := &ExecResponse{
+		ExitCode:  result.ExitCode,
+		Output:    result.Output,
+		Truncated: false,
+	}
+
+	if result.TimedOut {
+		resp.Error = "command exceeded the configured timeout and was killed"
+	}
+
+	runes := []rune(resp.Output)
+	if len(runes) > maxOutputChars {
+		resp.Output = string(runes[:maxOutputChars])
+		resp.Truncated = true
+	}
+
+	return resp
+}
+
+func Write(path string, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal response: %w", err)
 	}
