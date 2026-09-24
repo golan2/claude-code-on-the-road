@@ -14,6 +14,12 @@ import (
 
 const sessionConfFileName = "__session_conf.json"
 
+// archivedFolderName is the name of the top-level folder under the watchFolder
+// root that holds archived session folders. Sessions are moved there externally
+// (e.g. by PhoneClaude via Drive, at Izik's explicit request) once finished.
+// GoApp never creates or manages this folder — it only skips scanning into it.
+const archivedFolderName = "_archived"
+
 var (
 	requestFilePattern       = regexp.MustCompile(`^(\d{5})_request\.json$`)
 	statusRequestFilePattern = regexp.MustCompile(`^(\d{5})_status_request_(\d{3})\.json$`)
@@ -61,6 +67,7 @@ func SaveSessionConf(sessionFolderPath string, conf *SessionConf) error {
 // Unreadable directories are skipped silently.
 func DiscoverSessionFolders(root string) ([]string, error) {
 	var folders []string
+	cleanRoot := filepath.Clean(root)
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if d != nil && d.IsDir() {
@@ -70,6 +77,14 @@ func DiscoverSessionFolders(root string) ([]string, error) {
 		}
 		if !d.IsDir() {
 			return nil
+		}
+		// The "_archived" folder directly under the root holds sessions archived
+		// externally (moved via Drive, e.g. by PhoneClaude at Izik's explicit
+		// request). Its contents must never be scanned or polled, so prune the
+		// whole subtree. Only the top-level one is special — a folder named
+		// "_archived" deeper in the tree is treated normally.
+		if d.Name() == archivedFolderName && filepath.Dir(path) == cleanRoot {
+			return fs.SkipDir
 		}
 		hasRequest, err := dirHasRequestFile(path)
 		if err != nil {

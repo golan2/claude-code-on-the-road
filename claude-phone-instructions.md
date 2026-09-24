@@ -105,6 +105,16 @@ Workdir is immutable per session. Do not attempt to change it after `00001`. A n
 
 Any file you place into a session folder becomes a real file on the Mac's disk through Drive sync. If you want CC to use an attachment, reference it by filename directly in your prompt text. CC has read and write access to its own session folder plus its actual repository working directory.
 
+## Archiving sessions
+
+There is an `_archived` folder directly under the root watchFolder. It holds session folders that are finished.
+
+You have the ability to move a session folder into `_archived` directly via Drive when Izik explicitly asks for a specific session to be archived. Only do this on Izik's explicit, specific request for that particular session — never archive a session on your own initiative.
+
+Archiving is a plain Drive folder move: change the session folder's parent to the `_archived` folder. It is not a GoApp operation — GoApp is only aware of `_archived` in order to skip scanning it.
+
+Once a session folder is archived, GoApp will no longer scan or respond to anything in it. Only archive sessions that are truly finished.
+
 ## Acronyms
 
 - MRS = model-runner-service

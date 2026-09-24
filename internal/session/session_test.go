@@ -7,6 +7,72 @@ import (
 	"testing"
 )
 
+func TestDiscoverSessionFolders(t *testing.T) {
+	writeRequest := func(t *testing.T, dir string) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "00001_request.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatalf("write fixture file in %s: %v", dir, err)
+		}
+	}
+
+	t.Run("when_normal_session_folder_exists_then_it_is_discovered", func(t *testing.T) {
+		root := t.TempDir()
+		sessionDir := filepath.Join(root, "my-session")
+		writeRequest(t, sessionDir)
+
+		got, err := DiscoverSessionFolders(root)
+		if err != nil {
+			t.Fatalf("DiscoverSessionFolders returned error: %v", err)
+		}
+		if !reflect.DeepEqual(got, []string{sessionDir}) {
+			t.Fatalf("got %v, want %v", got, []string{sessionDir})
+		}
+	})
+
+	t.Run("when_session_folder_is_under_root_archived_then_it_is_not_discovered", func(t *testing.T) {
+		root := t.TempDir()
+		writeRequest(t, filepath.Join(root, "_archived", "old-session"))
+
+		got, err := DiscoverSessionFolders(root)
+		if err != nil {
+			t.Fatalf("DiscoverSessionFolders returned error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("got %v, want no folders", got)
+		}
+	})
+
+	t.Run("when_root_archived_contains_request_file_then_it_is_not_a_session_folder", func(t *testing.T) {
+		root := t.TempDir()
+		writeRequest(t, filepath.Join(root, "_archived"))
+
+		got, err := DiscoverSessionFolders(root)
+		if err != nil {
+			t.Fatalf("DiscoverSessionFolders returned error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("got %v, want no folders", got)
+		}
+	})
+
+	t.Run("when_archived_is_nested_deeper_then_it_is_treated_normally", func(t *testing.T) {
+		root := t.TempDir()
+		sessionDir := filepath.Join(root, "group", "sub", "_archived")
+		writeRequest(t, sessionDir)
+
+		got, err := DiscoverSessionFolders(root)
+		if err != nil {
+			t.Fatalf("DiscoverSessionFolders returned error: %v", err)
+		}
+		if !reflect.DeepEqual(got, []string{sessionDir}) {
+			t.Fatalf("got %v, want %v", got, []string{sessionDir})
+		}
+	})
+}
+
 func TestStatusRequestCounters(t *testing.T) {
 	tests := []struct {
 		name         string
