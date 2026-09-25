@@ -275,7 +275,7 @@ func TestLatestActivity(t *testing.T) {
 		}
 	})
 
-	t.Run("when_exec_and_status_files_exist_then_they_are_ignored", func(t *testing.T) {
+	t.Run("when_exec_and_status_files_exist_then_they_also_count_as_activity", func(t *testing.T) {
 		dir := t.TempDir()
 		writeAt(t, dir, "00001_request.json", base)
 		writeAt(t, dir, "00001_exec_request.json", base.Add(time.Hour))
@@ -290,14 +290,14 @@ func TestLatestActivity(t *testing.T) {
 		if !ok {
 			t.Fatalf("got ok=false, want true")
 		}
-		if !got.Equal(base) {
-			t.Fatalf("got %v, want %v (exec/status files should not count)", got, base)
+		if !got.Equal(base.Add(4 * time.Hour)) {
+			t.Fatalf("got %v, want %v (the status_response file, the latest of all of them)", got, base.Add(4*time.Hour))
 		}
 	})
 
 	t.Run("when_no_matching_files_then_ok_is_false", func(t *testing.T) {
 		dir := t.TempDir()
-		writeAt(t, dir, "00001_exec_request.json", base)
+		writeAt(t, dir, "__session_conf.json", base)
 
 		_, ok, err := LatestActivity(dir)
 		if err != nil {

@@ -25,7 +25,7 @@ var (
 	requestFilePattern       = regexp.MustCompile(`^(\d{5})_request\.json$`)
 	statusRequestFilePattern = regexp.MustCompile(`^(\d{5})_status_request_(\d{3})\.json$`)
 	execRequestFilePattern   = regexp.MustCompile(`^(\d{5})_exec_request\.json$`)
-	activityFilePattern      = regexp.MustCompile(`^\d{5}_(request|response|ack)\.json$`)
+	activityFilePattern      = regexp.MustCompile(`^\d{5}_(request|response|ack|exec_request|exec_response|status_request_\d{3}|status_response_\d{3})\.json$`)
 )
 
 // SessionConf holds the per-session metadata stored in __session_conf.json.
@@ -144,8 +144,11 @@ func NextPendingRequest(sessionFolderPath string) (ordinal string, requestFilePa
 }
 
 // LatestActivity returns the modification time of the most recently modified
-// NNNNN_request.json, NNNNN_response.json, or NNNNN_ack.json file directly in
-// sessionFolderPath. ok is false if none of those files are present.
+// activity file directly in sessionFolderPath: a NNNNN_request.json,
+// NNNNN_response.json, NNNNN_ack.json, NNNNN_exec_request.json,
+// NNNNN_exec_response.json, NNNNN_status_request_MMM.json, or
+// NNNNN_status_response_MMM.json. ok is false if none of those files are
+// present.
 func LatestActivity(sessionFolderPath string) (latest time.Time, ok bool, err error) {
 	entries, err := os.ReadDir(sessionFolderPath)
 	if err != nil {
