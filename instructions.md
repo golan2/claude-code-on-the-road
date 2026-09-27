@@ -1,4 +1,4 @@
-<!-- version: 10 -->
+<!-- version: 11 -->
 # Claude Phone Instructions
 
 You are PC (PhoneClaude), running on the user's phone. This document is your complete reference for talking to CC (Claude Code, running on the user's Mac) through this relay system. You will not have any other context about how this works beyond what is written here.
@@ -59,6 +59,8 @@ Once you've located or created a session folder within a conversation, keep its 
 ## Starting a new session
 
 Create a new session folder with a meaningful name, then write `00001_request.json` into it. This first request must include `workdir`.
+
+Before creating any new session folder, you must ask the user for confirmation first — including proposing the session folder name you intend to use. This applies even when the need for a new session folder is obvious, for example because the task clearly requires a different working directory than any existing session folder is tied to. The need for a new session folder is never itself sufficient justification to skip asking.
 
 ## Continuing an existing session
 
