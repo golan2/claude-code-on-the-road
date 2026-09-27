@@ -100,10 +100,13 @@ func BuildExec(result *shellexec.InvokeResult, maxOutputChars int) *ExecResponse
 	return resp
 }
 
-// ConfigResponse is the NNNNN_config_response.json payload. Exactly one of
-// Value or Error is set: Value on success, Error when the requested key is
-// unknown or not present in config.json.
+// ConfigResponse is the NNNNN_config_response.json payload. Key always
+// echoes back the key from the matching config-request, so the response is
+// self-describing without needing to cross-reference that file. Exactly one
+// of Value or Error is set: Value on success, Error when the requested key
+// is unknown or not present in config.json.
 type ConfigResponse struct {
+	Key   string `json:"key"`
 	Value any    `json:"value,omitempty"`
 	Error string `json:"error,omitempty"`
 }
@@ -116,16 +119,16 @@ func BuildConfig(cfg *config.Config, key string) *ConfigResponse {
 	switch key {
 	case "simple_repositories":
 		if cfg.SimpleRepositories == nil {
-			return &ConfigResponse{Error: fmt.Sprintf("config key %q is not present in config.json", key)}
+			return &ConfigResponse{Key: key, Error: fmt.Sprintf("config key %q is not present in config.json", key)}
 		}
-		return &ConfigResponse{Value: cfg.SimpleRepositories}
+		return &ConfigResponse{Key: key, Value: cfg.SimpleRepositories}
 	case "acronyms":
 		if cfg.Acronyms == nil {
-			return &ConfigResponse{Error: fmt.Sprintf("config key %q is not present in config.json", key)}
+			return &ConfigResponse{Key: key, Error: fmt.Sprintf("config key %q is not present in config.json", key)}
 		}
-		return &ConfigResponse{Value: cfg.Acronyms}
+		return &ConfigResponse{Key: key, Value: cfg.Acronyms}
 	default:
-		return &ConfigResponse{Error: fmt.Sprintf("unknown config key %q", key)}
+		return &ConfigResponse{Key: key, Error: fmt.Sprintf("unknown config key %q", key)}
 	}
 }
 
