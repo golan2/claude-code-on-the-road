@@ -36,31 +36,6 @@ type inFlightSessions struct {
 	processing map[string]bool // a set of all in flight sessions folder full-paths
 }
 
-// inFlightExecs keeps track of individual exec-request ordinals that are
-// already being handled, so the same exec-request is not dispatched twice.
-type inFlightExecs struct {
-	mu         sync.Mutex
-	processing map[string]bool // keys are "folder|ordinal"
-}
-
-func (e *inFlightExecs) tryMark(folder, ordinal string) bool {
-	key := folder + "|" + ordinal
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.processing[key] {
-		return false
-	}
-	e.processing[key] = true
-	return true
-}
-
-func (e *inFlightExecs) unmark(folder, ordinal string) {
-	key := folder + "|" + ordinal
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	delete(e.processing, key)
-}
-
 func main() {
 	cfg, err := config.Load("config.json")
 	if err != nil {
@@ -72,7 +47,6 @@ func main() {
 	syncInstructions(cfg.WatchFolder)
 
 	inFlight := &inFlightSessions{processing: make(map[string]bool)}
-	inFlightExec := &inFlightExecs{processing: make(map[string]bool)}
 	sem := make(chan struct{}, cfg.MaxConcurrentSessions)
 
 	printRecentSessions(cfg.WatchFolder)
@@ -82,7 +56,7 @@ func main() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		pollOnce(cfg, inFlight, inFlightExec, sem)
+		pollOnce(cfg, inFlight, sem)
 	}
 }
 
@@ -338,7 +312,7 @@ func recoverStuckSessions(cfg *config.Config, inFlight *inFlightSessions, sem ch
 	}
 }
 
-func pollOnce(cfg *config.Config, inFlight *inFlightSessions, inFlightExec *inFlightExecs, sem chan struct{}) {
+func pollOnce(cfg *config.Config, inFlight *inFlightSessions, sem chan struct{}) {
 	folders, err := session.DiscoverSessionFolders(cfg.WatchFolder)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -371,13 +345,16 @@ func pollOnce(cfg *config.Config, inFlight *inFlightSessions, inFlightExec *inFl
 			continue
 		}
 		for _, execReq := range execRequests {
-			if !inFlightExec.tryMark(folder, execReq.Ordinal) {
-				continue
-			}
-			go func(folder, ordinal, execRequestFilePath string) {
-				defer inFlightExec.unmark(folder, ordinal)
-				processExecRequest(cfg, folder, ordinal, execRequestFilePath)
-			}(folder, execReq.Ordinal, execReq.Path)
+			go processExecRequest(cfg, folder, execReq.Ordinal, execReq.Path)
+		}
+
+		configRequests, err := session.PendingConfigRequests(folder)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			continue
+		}
+		for _, configReq := range configRequests {
+			go processConfigRequest(cfg, folder, configReq.Ordinal, configReq.Path)
 		}
 	}
 }
@@ -675,4 +652,57 @@ func writeExecError(execRequestFilePath, ordinal, sessionName, message string) {
 		fmt.Fprintln(os.Stderr, err)
 	}
 	fmt.Printf("ERROR: [%s][exec_response_%s] - %s\n", sessionName, ordinal, message)
+}
+
+type configRequestPayload struct {
+	Key string `json:"key"`
+}
+
+func loadConfigRequest(path string) (*configRequestPayload, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config request file: %w", err)
+	}
+
+	var payload configRequestPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, fmt.Errorf("malformed config request JSON: %w", err)
+	}
+	if payload.Key == "" {
+		return nil, fmt.Errorf("config request key is missing or empty")
+	}
+	return &payload, nil
+}
+
+// processConfigRequest answers a config-request synchronously — there is no
+// subprocess to launch and therefore no ack file, just an immediate
+// NNNNN_config_response.json written from the in-memory cfg.
+func processConfigRequest(cfg *config.Config, folder, ordinal, configRequestFilePath string) {
+	sessionName := filepath.Base(folder)
+	fmt.Printf("[%s][config_%s] - resolving config key\n", sessionName, ordinal)
+
+	payload, err := loadConfigRequest(configRequestFilePath)
+	if err != nil {
+		writeConfigError(configRequestFilePath, ordinal, sessionName, err.Error())
+		return
+	}
+
+	resp := response.BuildConfig(cfg, payload.Key)
+	if err := response.Write(session.ConfigResponsePathFor(configRequestFilePath), resp); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
+
+	if resp.Error != "" {
+		fmt.Printf("ERROR: [%s][config_response_%s] - %s\n", sessionName, ordinal, resp.Error)
+	} else {
+		fmt.Printf("[%s][config_response_%s] - written to folder\n", sessionName, ordinal)
+	}
+}
+
+func writeConfigError(configRequestFilePath, ordinal, sessionName, message string) {
+	resp := &response.ConfigResponse{Error: message}
+	if err := response.Write(session.ConfigResponsePathFor(configRequestFilePath), resp); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
+	fmt.Printf("ERROR: [%s][config_response_%s] - %s\n", sessionName, ordinal, message)
 }

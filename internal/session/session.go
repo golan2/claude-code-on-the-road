@@ -25,7 +25,8 @@ var (
 	requestFilePattern       = regexp.MustCompile(`^(\d{5})_request\.json$`)
 	statusRequestFilePattern = regexp.MustCompile(`^(\d{5})_status_request_(\d{3})\.json$`)
 	execRequestFilePattern   = regexp.MustCompile(`^(\d{5})_exec_request\.json$`)
-	activityFilePattern      = regexp.MustCompile(`^\d{5}_(request|response|ack|exec_request|exec_response|status_request_\d{3}|status_response_\d{3})\.json$`)
+	configRequestFilePattern = regexp.MustCompile(`^(\d{5})_config_request\.json$`)
+	activityFilePattern      = regexp.MustCompile(`^\d{5}_(request|response|ack|exec_request|exec_response|config_request|config_response|status_request_\d{3}|status_response_\d{3})\.json$`)
 )
 
 // SessionConf holds the per-session metadata stored in __session_conf.json.
@@ -146,7 +147,8 @@ func NextPendingRequest(sessionFolderPath string) (ordinal string, requestFilePa
 // LatestActivity returns the modification time of the most recently modified
 // activity file directly in sessionFolderPath: a NNNNN_request.json,
 // NNNNN_response.json, NNNNN_ack.json, NNNNN_exec_request.json,
-// NNNNN_exec_response.json, NNNNN_status_request_MMM.json, or
+// NNNNN_exec_response.json, NNNNN_config_request.json,
+// NNNNN_config_response.json, NNNNN_status_request_MMM.json, or
 // NNNNN_status_response_MMM.json. ok is false if none of those files are
 // present.
 func LatestActivity(sessionFolderPath string) (latest time.Time, ok bool, err error) {
@@ -306,6 +308,54 @@ func ExecResponsePathFor(execRequestFilePath string) string {
 		return execRequestFilePath
 	}
 	return filepath.Join(dir, m[1]+"_exec_response.json")
+}
+
+// PendingConfigRequest describes a single pending config-request file.
+type PendingConfigRequest struct {
+	Ordinal string
+	Path    string
+}
+
+// PendingConfigRequests returns all NNNNN_config_request.json files in
+// sessionFolderPath that don't yet have a matching NNNNN_config_response.json,
+// sorted by ascending ordinal.
+func PendingConfigRequests(sessionFolderPath string) ([]PendingConfigRequest, error) {
+	entries, err := os.ReadDir(sessionFolderPath)
+	if err != nil {
+		return nil, fmt.Errorf("read session folder %s: %w", sessionFolderPath, err)
+	}
+
+	var ordinals []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if m := configRequestFilePattern.FindStringSubmatch(e.Name()); m != nil {
+			ordinals = append(ordinals, m[1])
+		}
+	}
+	sort.Strings(ordinals)
+
+	var pending []PendingConfigRequest
+	for _, ord := range ordinals {
+		reqPath := filepath.Join(sessionFolderPath, ord+"_config_request.json")
+		if _, err := os.Stat(ConfigResponsePathFor(reqPath)); errors.Is(err, fs.ErrNotExist) {
+			pending = append(pending, PendingConfigRequest{Ordinal: ord, Path: reqPath})
+		}
+	}
+	return pending, nil
+}
+
+// ConfigResponsePathFor maps a NNNNN_config_request.json path to its
+// NNNNN_config_response.json path.
+func ConfigResponsePathFor(configRequestFilePath string) string {
+	dir := filepath.Dir(configRequestFilePath)
+	name := filepath.Base(configRequestFilePath)
+	m := configRequestFilePattern.FindStringSubmatch(name)
+	if m == nil {
+		return configRequestFilePath
+	}
+	return filepath.Join(dir, m[1]+"_config_response.json")
 }
 
 // StatusRequestCounters returns all status-request counters for the given ordinal

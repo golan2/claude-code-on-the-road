@@ -14,14 +14,35 @@ const (
 	defaultExecOutputMaxChars    = 30000
 )
 
+// SimpleRepository is one entry of the simpleRepositories config list,
+// returned verbatim as the value of a "simple_repositories" config-request.
+type SimpleRepository struct {
+	Nickname string `json:"nickname"`
+	Path     string `json:"path"`
+}
+
 // Config holds the application configuration loaded from a JSON file.
+//
+//   - WatchFolder: absolute path to the Drive-synced root folder GoApp polls for session folders.
+//   - PollIntervalSeconds: how often, in seconds, GoApp scans for new requests.
+//   - TimeoutMinutes: how long a Claude Code or exec-request subprocess may run before being killed.
+//   - PermissionMode: the default Claude Code permission mode used when a request doesn't specify one.
+//   - MaxConcurrentSessions: the maximum number of Claude Code invocations allowed to run at once.
+//   - ExecOutputMaxChars: the cap, in characters, on exec-response output before it is truncated.
+//   - SimpleRepositories: backs the "simple_repositories" config-request key; left nil (not defaulted
+//     to an empty slice) when absent from the config file, so "never configured" can be told apart
+//     from "configured but empty".
+//   - Acronyms: backs the "acronyms" config-request key; independent of SimpleRepositories, left nil
+//     (not defaulted to an empty map) when absent from the config file for the same reason.
 type Config struct {
-	WatchFolder           string `json:"watchFolder"`
-	PollIntervalSeconds   int    `json:"pollIntervalSeconds"`
-	TimeoutMinutes        int    `json:"timeoutMinutes"`
-	PermissionMode        string `json:"permissionMode"`
-	MaxConcurrentSessions int    `json:"maxConcurrentSessions"`
-	ExecOutputMaxChars    int    `json:"execOutputMaxChars"`
+	WatchFolder           string             `json:"watchFolder"`
+	PollIntervalSeconds   int                `json:"pollIntervalSeconds"`
+	TimeoutMinutes        int                `json:"timeoutMinutes"`
+	PermissionMode        string             `json:"permissionMode"`
+	MaxConcurrentSessions int                `json:"maxConcurrentSessions"`
+	ExecOutputMaxChars    int                `json:"execOutputMaxChars"`
+	SimpleRepositories    []SimpleRepository `json:"simpleRepositories"`
+	Acronyms              map[string]string  `json:"acronyms"`
 }
 
 // Load reads the JSON configuration at path, applies defaults, and validates it.

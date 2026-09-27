@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/golan2/claude-code-on-the-road/internal/claudecode"
+	"github.com/golan2/claude-code-on-the-road/internal/config"
 	"github.com/golan2/claude-code-on-the-road/internal/shellexec"
 )
 
@@ -97,6 +98,35 @@ func BuildExec(result *shellexec.InvokeResult, maxOutputChars int) *ExecResponse
 	}
 
 	return resp
+}
+
+// ConfigResponse is the NNNNN_config_response.json payload. Exactly one of
+// Value or Error is set: Value on success, Error when the requested key is
+// unknown or not present in config.json.
+type ConfigResponse struct {
+	Value any    `json:"value,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// BuildConfig resolves a config-request's key against cfg. It fails fast with
+// an ConfigResponse.Error (never partial data or a retry) when key is not one
+// of the supported config-request keys, or when its backing config.json field
+// was left unset.
+func BuildConfig(cfg *config.Config, key string) *ConfigResponse {
+	switch key {
+	case "simple_repositories":
+		if cfg.SimpleRepositories == nil {
+			return &ConfigResponse{Error: fmt.Sprintf("config key %q is not present in config.json", key)}
+		}
+		return &ConfigResponse{Value: cfg.SimpleRepositories}
+	case "acronyms":
+		if cfg.Acronyms == nil {
+			return &ConfigResponse{Error: fmt.Sprintf("config key %q is not present in config.json", key)}
+		}
+		return &ConfigResponse{Value: cfg.Acronyms}
+	default:
+		return &ConfigResponse{Error: fmt.Sprintf("unknown config key %q", key)}
+	}
 }
 
 func Write(path string, v any) error {
