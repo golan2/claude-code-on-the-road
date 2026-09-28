@@ -61,7 +61,7 @@ func main() {
 }
 
 // startupMarkerFileName is written directly into the watch folder root (not
-// into any session folder) so PhoneClaude and Izik can tell GoApp is alive
+// into any session folder) so PhoneClaude (and the user) can tell if GoApp is alive
 // and see when it last started.
 const startupMarkerFileName = "goapp_started.json"
 
