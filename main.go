@@ -23,6 +23,7 @@ import (
 	"github.com/golan2/claude-code-on-the-road/internal/response"
 	"github.com/golan2/claude-code-on-the-road/internal/session"
 	"github.com/golan2/claude-code-on-the-road/internal/shellexec"
+	"github.com/golan2/claude-code-on-the-road/internal/skillscopy"
 )
 
 type requestPayload struct {
@@ -112,6 +113,16 @@ func main() {
 
 	printRecentSessions(cfg.WatchFolder)
 	recoverStuckSessions(cfg, inFlight, sem)
+
+	runSkillsCopy(cfg)
+	go func() {
+		defer recoverPanic("skillsCopyLoop")
+		skillsTicker := time.NewTicker(time.Duration(cfg.SkillsCopyIntervalSeconds) * time.Second)
+		defer skillsTicker.Stop()
+		for range skillsTicker.C {
+			runSkillsCopy(cfg)
+		}
+	}()
 
 	ticker := time.NewTicker(time.Duration(cfg.PollIntervalSeconds) * time.Second)
 	defer ticker.Stop()
@@ -278,6 +289,21 @@ func syncInstructions(watchFolder string) {
 		return
 	}
 	log.Printf("Synced instructions to Drive root (updated to version %d)\n", localVersion)
+}
+
+// runSkillsCopy performs one skillscopy.Sync pass using cfg's skill settings.
+// Called once at startup (before any session is ever launched, so the very
+// first Claude Code invocation already sees a populated SkillsCopyDir) and
+// then on cfg.SkillsCopyIntervalSeconds thereafter. A nil cfg.SkillPaths
+// (never configured) makes Sync a no-op, not an error.
+func runSkillsCopy(cfg *config.Config) {
+	err := skillscopy.Sync(skillscopy.Config{
+		SkillPaths: cfg.SkillPaths,
+		CopyDir:    cfg.SkillsCopyDir,
+	}, log.Printf)
+	if err != nil {
+		log.Printf("ERROR: %v", err)
+	}
 }
 
 // recentSessionsCount is how many of the most recently active session folders
@@ -525,7 +551,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		Prompt:          payload.Prompt,
 		Workdir:         workdir,
 		PermissionMode:  permissionMode,
-		AddDir:          folder,
+		AddDirs:         []string{folder, cfg.SkillsCopyDir},
 		ResumeSessionID: resumeSessionID,
 		Timeout:         time.Duration(cfg.TimeoutMinutes) * time.Minute,
 		Progress:        tracker,

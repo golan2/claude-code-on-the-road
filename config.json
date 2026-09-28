@@ -4,6 +4,10 @@
   "timeoutMinutes": 10,
   "permissionMode": "bypassPermissions",
   "maxConcurrentSessions": 10,
+  "skill_paths": [
+    "~/.claude/skills",
+    "~/Documents/claude-code-skills"
+  ],
   "simpleRepositories": [
     { "nickname": "algolib", "path": "/Users/izikgolan/git/platform/algolib" },
     { "nickname": "argocd-argo-workflows", "path": "/Users/izikgolan/git/platform/argocd-argo-workflows" },

@@ -4,16 +4,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 const (
-	defaultPollIntervalSeconds   = 5
-	defaultTimeoutMinutes        = 10
-	defaultPermissionMode        = "bypassPermissions"
-	defaultMaxConcurrentSessions = 10
-	defaultExecOutputMaxChars    = 30000
-	defaultLogFile               = "goapp.log"
-	defaultExecAckDelaySeconds   = 5
+	defaultPollIntervalSeconds       = 5
+	defaultTimeoutMinutes            = 10
+	defaultPermissionMode            = "bypassPermissions"
+	defaultMaxConcurrentSessions     = 10
+	defaultExecOutputMaxChars        = 30000
+	defaultLogFile                   = "goapp.log"
+	defaultExecAckDelaySeconds       = 5
+	defaultSkillsCopyDir             = "/tmp/ccotr-skills"
+	defaultSkillsCopyIntervalSeconds = 300
 )
 
 // SimpleRepository is one entry of the simpleRepositories config list,
@@ -43,17 +47,28 @@ type SimpleRepository struct {
 //     before GoApp writes its NNNNN_ack.json. A command that finishes within this window gets no
 //     ack at all — its NNNNN_exec_response.json is the only signal PC needs, since it arrives just
 //     as fast. Defaults to 5 when absent from the config file.
+//   - SkillPaths: a manually-curated list of root directories to copy skills from (see
+//     HLD-skills-support.md). Each entry may start with "~/" for the user's home directory. Left nil
+//     (not defaulted to any path) when absent from the config file — skill copying is simply skipped.
+//   - SkillsCopyDir: the shared directory GoApp copies every discovered skill into, with
+//     disable-model-invocation stripped in each copy, hierarchy preserved per SkillPaths root. Passed
+//     to every Claude Code invocation as an extra --add-dir. Defaults to "/tmp/ccotr-skills".
+//   - SkillsCopyIntervalSeconds: how often, in seconds, GoApp re-scans SkillPaths for changed or
+//     deleted skill files and re-copies/cleans up accordingly. Defaults to 300 (5 minutes).
 type Config struct {
-	WatchFolder           string             `json:"watchFolder"`
-	PollIntervalSeconds   int                `json:"pollIntervalSeconds"`
-	TimeoutMinutes        int                `json:"timeoutMinutes"`
-	PermissionMode        string             `json:"permissionMode"`
-	MaxConcurrentSessions int                `json:"maxConcurrentSessions"`
-	ExecOutputMaxChars    int                `json:"execOutputMaxChars"`
-	SimpleRepositories    []SimpleRepository `json:"simpleRepositories"`
-	Acronyms              map[string]string  `json:"acronyms"`
-	LogFile               string             `json:"logFile"`
-	ExecAckDelaySeconds   int                `json:"execAckDelaySeconds"`
+	WatchFolder               string             `json:"watchFolder"`
+	PollIntervalSeconds       int                `json:"pollIntervalSeconds"`
+	TimeoutMinutes            int                `json:"timeoutMinutes"`
+	PermissionMode            string             `json:"permissionMode"`
+	MaxConcurrentSessions     int                `json:"maxConcurrentSessions"`
+	ExecOutputMaxChars        int                `json:"execOutputMaxChars"`
+	SimpleRepositories        []SimpleRepository `json:"simpleRepositories"`
+	Acronyms                  map[string]string  `json:"acronyms"`
+	LogFile                   string             `json:"logFile"`
+	ExecAckDelaySeconds       int                `json:"execAckDelaySeconds"`
+	SkillPaths                []string           `json:"skill_paths"`
+	SkillsCopyDir             string             `json:"skillsCopyDir"`
+	SkillsCopyIntervalSeconds int                `json:"skillsCopyIntervalSeconds"`
 }
 
 // Load reads the JSON configuration at path, applies defaults, and validates it.
@@ -99,6 +114,34 @@ func applyDefaults(cfg *Config) {
 	if cfg.ExecAckDelaySeconds == 0 {
 		cfg.ExecAckDelaySeconds = defaultExecAckDelaySeconds
 	}
+	if cfg.SkillsCopyDir == "" {
+		cfg.SkillsCopyDir = defaultSkillsCopyDir
+	}
+	cfg.SkillsCopyDir = expandHome(cfg.SkillsCopyDir)
+	if cfg.SkillsCopyIntervalSeconds == 0 {
+		cfg.SkillsCopyIntervalSeconds = defaultSkillsCopyIntervalSeconds
+	}
+	for i, p := range cfg.SkillPaths {
+		cfg.SkillPaths[i] = expandHome(p)
+	}
+}
+
+// expandHome replaces a leading "~" or "~/..." in path with the current
+// user's home directory. Paths not starting with "~" are returned unchanged.
+// If the home directory can't be determined, path is returned as-is rather
+// than failing config load over it.
+func expandHome(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, strings.TrimPrefix(path, "~/"))
 }
 
 func validate(cfg *Config) error {
