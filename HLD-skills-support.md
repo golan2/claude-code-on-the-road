@@ -130,31 +130,69 @@ gives a headless caller genuine manual-invocation semantics for a skill whose
 frontmatter sets `disable-model-invocation: true`. This is a deliberate
 boundary between interactive and programmatic callers, not an oversight.
 
-### 3.4 The fix: one-time startup copy with the flag stripped
+### 3.4 The fix: periodic copy of ALL skills into `skillsCopyDir`, with `disable-model-invocation` stripped unconditionally
 
-At GoApp startup, before any sessions are launched, GoApp copies every
-manual-invocation skill (i.e. every skill folder whose `SKILL.md` sets
-`disable-model-invocation: true`) to a separate, shared location, and in the
-copy only, rewrites that frontmatter field to `false`. All headless sessions
-GoApp launches are pointed at this shared location (in addition to, or
-instead of, the standard discovery paths, per implementation), so these
-skills become normally auto-invocable from plain prompts — matching the
-behavior already proven in 3.2.
+GoApp copies **every** discoverable skill — not just the ones flagged
+`disable-model-invocation: true` — from its known source paths into a
+separate, shared directory, and in every copy, unconditionally rewrites
+`disable-model-invocation` to `false`, regardless of what the source set it
+to. Copying everything and stripping the field unconditionally means the
+copy step needs no conditional logic branching on the flag's value — it's a
+uniform operation applied to every skill — and it has a useful side effect:
+any skill becomes force-invocable by name from a headless session, even one
+that was already auto-invocable at the source, in addition to that skill's
+normal description-triggered auto-invocation continuing to work unaffected.
+
+**Hierarchy is preserved, not flattened.** Each source root is mirrored
+under `skillsCopyDir` (e.g.
+`skillsCopyDir/<source-root-identifier>/<skill-name>/SKILL.md`) rather than
+dumping every skill's files into one flat directory. This means two
+differently-sourced skills that happen to share a name do not collide, and
+which source produced a given copy stays visible from its path alone.
+
+**The copy runs at GoApp startup, and periodically thereafter** (interval to
+be chosen at implementation time), so edits, additions, and newly-flagged
+skills at the source are picked up without requiring a GoApp restart. This
+supersedes the earlier revision of this HLD, which specified a one-time,
+startup-only copy limited to flagged skills — see §4 for why that was
+superseded.
+
+**Change detection** is mtime-based, tracked in a state file,
+`skills_state.json`, that GoApp maintains **inside `skillsCopyDir` itself**
+(alongside the copied skills — not in GoApp's own install folder, and not
+inside the Google-Drive-synced `watchFolder`). It maps each source skill
+file's path to the last modification time GoApp saw for it, **read from the
+source file**, never from the copy — the copy's own mtime is always
+freshly-written right after GoApp touches it, so comparing against the copy
+would make every file look changed on every single pass. On each periodic
+check, GoApp:
+
+1. Stats every known source skill file and compares its current mtime
+   against the baseline recorded in `skills_state.json` (a file absent from
+   the baseline — new or never-copied — counts as changed).
+2. Re-copies and re-strips only the files that changed.
+3. Updates `skills_state.json`'s entry for each file **after** its copy
+   succeeds, so a crash mid-cycle just means that file is safely re-copied
+   (idempotent) on the next pass rather than corrupting the baseline.
 
 The original skill files, wherever they live (`~/.claude/skills`, project
-`.claude/skills`, etc.), are left completely untouched. The interactive TUI
-continues to see and enforce the real flag; only GoApp's headless copies have
-it stripped.
+`.claude/skills`, etc.), are left completely untouched by all of this. The
+interactive TUI continues to see and enforce the real flag; only the
+copies under `skillsCopyDir` have it stripped.
 
-The destination directory for this copy is a new `config.json` key,
-`skillsCopyDir` (camelCase, consistent with GoApp's existing config fields
-like `watchFolder` and `permissionMode`), rather than a hardcoded path.
-Default value: `/tmp/ccotr-skills`. This keeps the location operator-visible
-and changeable (e.g. if `/tmp` is unsuitable on a given machine) without a
-code change, following the same pattern GoApp already uses for other
-filesystem paths in config (`watchFolder`).
+The destination directory is the `config.json` key `skillsCopyDir`
+(camelCase, consistent with GoApp's existing config fields like
+`watchFolder` and `permissionMode`), rather than a hardcoded path. Default
+value: `/tmp/ccotr-skills`. This keeps the location operator-visible and
+changeable (e.g. if `/tmp` is unsuitable on a given machine) without a code
+change, following the same pattern GoApp already uses for other filesystem
+paths in config (`watchFolder`).
 
-**Evidence this works (session 00015, live test on `grill-me`):**
+**Evidence the strip mechanism itself works (session 00015, live test on
+`grill-me`):** this validates that rewriting `disable-model-invocation` to
+`false` in a skill's `SKILL.md` reliably changes runtime behavior — the
+premise this whole design depends on, independent of whether the strip is
+applied once or on a recurring schedule.
 
 1. Backed up the real `~/.agents/skills/grill-me/SKILL.md` (sha256 recorded).
 2. Edited the copy in place: `disable-model-invocation: true` → `false`.
@@ -175,17 +213,25 @@ The flip is read by the runtime as authoritative with no caching or
 session-start snapshotting that would make it unreliable — matching what 3.2
 already showed for unflagged skills.
 
-### 3.5 No locking mechanism needed
+### 3.5 Concurrency: single writer, changed-files-only, atomic replace
 
-The copy-and-strip step runs exactly once, at GoApp process startup, before
-any `claude` subprocess is launched. There is no writer to the copied files
-after that point — sessions only *read* from the shared copy location. This
-removes the concurrency hazard that would otherwise exist if the flag were
-flipped per-invocation on a shared/original file (a design considered and
-rejected during investigation, see §4): with a startup-only copy, there is no
-window in which one session's flip/restore could race another session's read
-of the same file, so no per-skill mutex, file lock, or serialization is
-required.
+GoApp is the only writer to `skillsCopyDir` — every `claude` session GoApp
+launches only *reads* from it, so there is no cross-process coordination
+problem of the kind the per-invocation flip-and-restore alternative would
+have had (see §4). Because each periodic pass only touches files whose
+*source* mtime changed since the last successful baseline update, steady-state
+write volume is small and mostly idle.
+
+Two implementation-level precautions (not requiring a locking mechanism, but
+worth calling out explicitly) keep this safe under GoApp's own concurrency
+(`config.json`'s `maxConcurrentSessions: 10` may have several sessions
+reading `skillsCopyDir` while a periodic copy pass is in flight):
+
+- Write each copied file via write-temp-then-rename inside `skillsCopyDir`,
+  so an in-flight `claude` session never observes a half-written `SKILL.md`.
+- Update `skills_state.json`'s entry for a file only after that file's copy
+  has landed, so the baseline never claims a copy is current before it
+  actually is.
 
 ## 4. Alternatives considered and rejected
 
@@ -201,8 +247,18 @@ required.
   sets `maxConcurrentSessions: 10`, so two concurrent invocations of the same
   manual-invocation skill, or a concurrent interactive use, would race the
   flip/restore. It would require a per-skill lock to be correct. The
-  one-time-startup-copy design (§3.4) achieves the same effect without ever
-  touching the original file and without any concurrency hazard.
+  copy-based design (§3.4) achieves the same effect without ever touching the
+  original file and without that concurrency hazard.
+- **One-time, startup-only copy limited to just the flagged skills**
+  (the design in the previous revision of this HLD). Superseded by §3.4's
+  periodic, copy-everything approach for two reasons: (1) a startup-only copy
+  can't notice a skill that gets newly flagged, edited, added, or removed
+  after GoApp launches without a full GoApp restart; (2) limiting the copy to
+  flagged skills only required GoApp to parse every source skill's
+  frontmatter first to decide what to copy — extra logic in exchange for no
+  real benefit, since copying every skill and unconditionally stripping the
+  field is simpler and also gives every skill a guaranteed by-name invocation
+  path as a side effect.
 - **Puppet a genuine slash-command invocation from GoApp.** Rejected per
   §3.3 — confirmed unreachable from any documented or undocumented CLI/SDK
   surface; not a viable engineering path regardless of effort.
@@ -211,21 +267,21 @@ required.
 
 ## 5. Summary of behavior after this change
 
-| Skill type | Mechanism | Status |
+| Skill type (as authored at the source) | Mechanism | Status |
 |---|---|---|
-| Auto-invocable (no flag) | Existing `claude -p` invocation, unmodified | Already works — no change |
-| Manual-invocation-only (`disable-model-invocation: true`) | Startup-time copy to shared location with flag stripped; sessions invoke the copy via plain prompts | Requires the copy step (this HLD) |
+| Any skill — auto-invocable or manual-invocation-only alike | Periodically copied (startup, then on an interval) into `skillsCopyDir`, source hierarchy preserved, `disable-model-invocation` stripped to `false` in every copy; sessions can trigger any copied skill both by description-matching and by name via a plain prompt | New copy mechanism (this HLD) |
 | Skill listing | Per-request ask to a `claude -p` session ("what skills are available to you?") | No GoApp-side scanning, ever |
 
 ## 6. Open items for implementation (not decided here)
 
 - How the shared copy directory (`skillsCopyDir`) is wired into session
   launch (e.g. an additional `--add-dir`/skills path vs. placing the copy
-  directly under a path CC already discovers).
-- How GoApp identifies which installed skills currently set
-  `disable-model-invocation: true` at startup (a lightweight frontmatter
-  scan at startup only, not the ongoing enumeration rejected in §3.1 — this
-  is a one-time bootstrap step, not a maintained discovery subsystem).
-- Refresh strategy if a skill's manual-invocation status changes while
-  GoApp is running (acceptable to require a GoApp restart, given this is a
-  startup-only step per §3.5).
+  directly under a path CC already discovers) — still open; everything else
+  about the copy mechanism itself (what gets copied, when, and how changes
+  are detected) is decided in §3.4.
+- The periodic re-copy interval (seconds/minutes) is not yet chosen.
+- Deletion handling: §3.4's mtime comparison naturally picks up new and
+  modified source files, but doesn't by itself detect a skill folder that
+  was *removed* from a source path — `skills_state.json` would keep
+  referencing a file that no longer exists. Whether stale copies (and their
+  baseline entries) get cleaned up, and on what trigger, is not yet decided.
