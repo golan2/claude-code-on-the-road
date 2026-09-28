@@ -14,7 +14,8 @@ type InvokeParams struct {
 	Command    string
 	Workdir    string
 	Timeout    time.Duration
-	OnLaunched func() // called synchronously the moment cmd.Start() succeeds
+	AckDelay   time.Duration // if > 0, OnLaunched only fires if the command is still running after this delay; if <= 0, it fires immediately at launch
+	OnLaunched func()        // called at most once, per AckDelay above
 }
 
 // InvokeResult holds the outcome of a shell command invocation.
@@ -51,7 +52,26 @@ func Invoke(params InvokeParams) (*InvokeResult, error) {
 	}
 
 	if params.OnLaunched != nil {
-		params.OnLaunched()
+		if params.AckDelay <= 0 {
+			params.OnLaunched()
+		} else {
+			// Fire OnLaunched only if the command is still running once
+			// AckDelay elapses. done is closed right before Invoke returns
+			// (via the deferred call below), so if the command finishes —
+			// or times out — first, this goroutine sees that instead and
+			// never calls OnLaunched at all: a command that's already
+			// finished has no need for a separate "picked up" ack, the
+			// response itself is proof of that.
+			done := make(chan struct{})
+			defer close(done)
+			go func() {
+				select {
+				case <-time.After(params.AckDelay):
+					params.OnLaunched()
+				case <-done:
+				}
+			}()
+		}
 	}
 
 	runErr := cmd.Wait()

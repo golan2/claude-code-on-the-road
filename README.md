@@ -28,6 +28,10 @@ While a Claude Code request is still in flight, PC can ask for a progress snapsh
 
 For raw shell commands that don't need Claude Code's judgment, `NNNNN_exec_request.json` carries a `command` string that GoApp runs directly through a shell, starting from the session's workdir. Unlike Claude Code requests, exec-requests aren't serialized behind the per-session lock — they run immediately, concurrently with an in-flight Claude Code request or other exec-requests. GoApp replies with `NNNNN_exec_response.json` (exit code, merged stdout+stderr, and a `truncated` flag).
 
+An exec-request is only ever run once, even though "pending" is derived purely from "no response file yet": GoApp keeps an in-memory set of `folder:ordinal` keys currently being processed (mirrored for config-requests too), so a command that outlives a single `pollIntervalSeconds` tick doesn't get re-dispatched as a second, concurrent execution by the next tick.
+
+Unlike a regular request, an exec-request's `NNNNN_ack.json` is **conditional**, not guaranteed: GoApp only writes it if the command is still running after `execAckDelaySeconds` (default 5) has elapsed since launch. A command that finishes within that window gets no ack at all — its exec-response arrives just as fast and is proof enough it was picked up. This keeps the common case (a quick command) down to one file instead of two, while a genuinely slow command still gets its "picked up" signal.
+
 A session can be **no-CC**: bootstrapped entirely by exec-requests, never invoking Claude Code. The first exec-request written into a brand-new session folder includes `workdir`, the same way a first regular request would, and GoApp creates `__session_conf.json` from it directly — with no Claude Code session ID yet. Such a session can still receive a regular request later, at which point it behaves exactly like one that had Claude Code from the start.
 
 ### Config requests

@@ -13,6 +13,7 @@ const (
 	defaultMaxConcurrentSessions = 10
 	defaultExecOutputMaxChars    = 30000
 	defaultLogFile               = "goapp.log"
+	defaultExecAckDelaySeconds   = 5
 )
 
 // SimpleRepository is one entry of the simpleRepositories config list,
@@ -38,6 +39,10 @@ type SimpleRepository struct {
 //   - LogFile: path (relative to the working directory GoApp is run from, same convention as the
 //     config file path itself) of the append-only log file GoApp writes every event to, in addition
 //     to stdout. Defaults to "goapp.log" when absent from the config file.
+//   - ExecAckDelaySeconds: how long, in seconds, an exec-request's command must still be running
+//     before GoApp writes its NNNNN_ack.json. A command that finishes within this window gets no
+//     ack at all — its NNNNN_exec_response.json is the only signal PC needs, since it arrives just
+//     as fast. Defaults to 5 when absent from the config file.
 type Config struct {
 	WatchFolder           string             `json:"watchFolder"`
 	PollIntervalSeconds   int                `json:"pollIntervalSeconds"`
@@ -48,6 +53,7 @@ type Config struct {
 	SimpleRepositories    []SimpleRepository `json:"simpleRepositories"`
 	Acronyms              map[string]string  `json:"acronyms"`
 	LogFile               string             `json:"logFile"`
+	ExecAckDelaySeconds   int                `json:"execAckDelaySeconds"`
 }
 
 // Load reads the JSON configuration at path, applies defaults, and validates it.
@@ -89,6 +95,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.LogFile == "" {
 		cfg.LogFile = defaultLogFile
+	}
+	if cfg.ExecAckDelaySeconds == 0 {
+		cfg.ExecAckDelaySeconds = defaultExecAckDelaySeconds
 	}
 }
 

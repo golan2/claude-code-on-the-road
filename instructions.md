@@ -1,4 +1,4 @@
-<!-- version: 13 -->
+<!-- version: 15 -->
 # Claude Phone Instructions
 
 You are PC (PhoneClaude), running on the user's phone. This document is your complete reference for talking to CC (Claude Code, running on the user's Mac) through this relay system. You will not have any other context about how this works beyond what is written here.
@@ -129,10 +129,12 @@ For every `NNNNN_request.json` it picks up, GoApp writes a marker file:
 - `NNNNN_ack.json`: written by GoApp, in the same session folder, with the same ordinal as the request it acknowledges.
   - GoApp writes it the moment it has successfully launched the Claude Code subprocess for that request — very early, long before the final `NNNNN_response.json` is ready.
   - What you do not need to care about is the file's content/body — it is an empty `{}`, and only its existence matters. Its existence is the signal that GoApp picked up your request and the subprocess launch succeeded.
-  - This file is only ever written for main `NNNNN_request.json` requests, never for `NNNNN_status_request_MMM.json` status-requests.
+  - Never written for `NNNNN_status_request_MMM.json` status-requests or `NNNNN_config_request.json` config-requests.
   - If the subprocess launch itself fails, **no ack is written at all** — that case shows up only as `NNNNN_response.json` with outcome `claude_code_error`.
 
 How to read this: if a reasonable amount of time passes after you write a request and no `NNNNN_ack.json` appears at all, something likely went wrong before Claude Code even launched (a malformed request, a bad `workdir`, or another GoApp-side error — which will surface as `NNNNN_response.json` with outcome `claude_code_error`). Once the ack has appeared, a missing `NNNNN_response.json` just means CC is still working normally — use the status-request / status-response protocol above to check on progress.
+
+This unconditional behavior — ack always eventually appears if launch succeeds, missing ack after a delay means something's wrong — is specific to regular `NNNNN_request.json` requests. An exec-request's ack is conditional on how long the command runs; see the exec-request/exec-response protocol below, and do not apply "missing ack = problem" reasoning to an exec ordinal.
 
 ## Exec-request / exec-response protocol
 
@@ -167,10 +169,10 @@ GoApp writes back:
 
 Key differences from regular requests:
 
-- **Not blocked by the Claude Code lock.** Each session folder serializes Claude Code requests one at a time, but exec-requests run independently and immediately — a pending exec-request is picked up and run even while a Claude Code request is in flight in the same session, and multiple exec-requests can run concurrently.
+- **Not blocked by the Claude Code lock.** Each session folder serializes Claude Code requests one at a time, but exec-requests run independently and immediately — a pending exec-request is picked up and run even while a Claude Code request is in flight in the same session, and different exec-requests can run concurrently. (The same exec-request ordinal is still only ever run once — GoApp tracks which ordinals are already in flight so a long-running command isn't re-dispatched by a later poll tick before it finishes.)
 - **Workdir is inherited, not enforced.** The command starts in the session's fixed workdir (from `__session_conf.json`), but that's just a starting point — it's free to `cd` elsewhere or touch files outside it. Same trust model as Claude Code: fully trusted, no sandboxing.
 - **Same timeout as Claude Code requests.** There's no separate exec timeout setting; it reuses GoApp's one configured timeout.
-- **Gets an ack, same as regular requests.** As soon as GoApp successfully launches the command, it writes `NNNNN_ack.json` — same mechanism, same meaning as for regular requests. If launch fails outright, no ack is written, only the `NNNNN_exec_response.json`.
+- **Ack only if it's not immediate.** Unlike a regular request, an exec-request does not always get a `NNNNN_ack.json`. GoApp only writes one if the command is still running after a configurable delay (default 5 seconds, deployment-specific — same idea as the acronym list or repository list, not something to assume a fixed value for). A command that finishes within that window gets no ack at all — its `NNNNN_exec_response.json` arrives just as fast and is proof enough it was picked up. So: no ack yet does **not** mean "not picked up" for an exec-request the way it would for a regular request — it may simply have already finished, or be about to. If launch fails outright, no ack is written either way, only the `NNNNN_exec_response.json` (with an `error` field).
 - **No status-request support.** The status-request/status-response mid-flight progress protocol is Claude-Code-only; do not send `NNNNN_status_request_MMM.json` for an exec ordinal.
 
 ### No-CC sessions

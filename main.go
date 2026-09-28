@@ -33,10 +33,56 @@ type requestPayload struct {
 
 // inFlightSessions keeps track of all Claude Code invocations that are in progress and awaiting a response.
 // The mutex prevents having 2 Claude Code invocations in flight for the same folder at once, which would
-// cause confusion when responses come back.
+// cause confusion when responses come back. Unlike inFlightKeyed below, a folder's mark here is a real
+// concurrency gate: it stays set for the entire duration of processRequest, genuinely serializing Claude
+// Code requests one at a time per folder — not just protecting a map.
 type inFlightSessions struct {
 	mu         sync.Mutex
 	processing map[string]bool // a set of all in flight sessions folder full-paths
+}
+
+// inFlightKeyed tracks an arbitrary set of string keys currently being
+// processed. It backs exec-request and config-request de-duplication: unlike
+// regular requests, "pending" for these is derived purely from "no response
+// file yet" (session.PendingExecRequests / PendingConfigRequests), with no
+// separate marker for "already dispatched, still running". Without this, an
+// exec-request whose command runs longer than one poll tick gets re-dispatched
+// as a brand-new goroutine on every subsequent tick that still finds no
+// response file — running the same command multiple times concurrently,
+// each invocation racing the others to write the final response.
+//
+// Its mutex is purely bookkeeping, not a concurrency gate the way
+// inFlightSessions' is: tryMark/unmark only ever hold it for the instant it
+// takes to check-and-set (or delete) one map entry, never while the exec
+// command or config lookup itself runs. It never blocks two different
+// ordinals, or the same ordinal in two different folders, from running fully
+// concurrently — it only ever prevents the exact same (folder, ordinal) pair
+// from being dispatched twice.
+type inFlightKeyed struct {
+	mu         sync.Mutex
+	processing map[string]bool
+}
+
+func (s *inFlightKeyed) tryMark(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.processing[key] {
+		return false
+	}
+	s.processing[key] = true
+	return true
+}
+
+func (s *inFlightKeyed) unmark(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.processing, key)
+}
+
+// execConfigKey builds the de-duplication key for one ordinal within one
+// session folder, shared by exec-request and config-request dispatch.
+func execConfigKey(folder, ordinal string) string {
+	return folder + ":" + ordinal
 }
 
 func main() {
@@ -60,6 +106,8 @@ func main() {
 	syncInstructions(cfg.WatchFolder)
 
 	inFlight := &inFlightSessions{processing: make(map[string]bool)}
+	inFlightExecs := &inFlightKeyed{processing: make(map[string]bool)}
+	inFlightConfigs := &inFlightKeyed{processing: make(map[string]bool)}
 	sem := make(chan struct{}, cfg.MaxConcurrentSessions)
 
 	printRecentSessions(cfg.WatchFolder)
@@ -69,7 +117,7 @@ func main() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		pollOnce(cfg, inFlight, sem)
+		pollOnce(cfg, inFlight, inFlightExecs, inFlightConfigs, sem)
 	}
 }
 
@@ -326,7 +374,7 @@ func recoverStuckSessions(cfg *config.Config, inFlight *inFlightSessions, sem ch
 	}
 }
 
-func pollOnce(cfg *config.Config, inFlight *inFlightSessions, sem chan struct{}) {
+func pollOnce(cfg *config.Config, inFlight *inFlightSessions, inFlightExecs, inFlightConfigs *inFlightKeyed, sem chan struct{}) {
 	folders, err := session.DiscoverSessionFolders(cfg.WatchFolder)
 	if err != nil {
 		log.Printf("ERROR: %v", err)
@@ -359,8 +407,13 @@ func pollOnce(cfg *config.Config, inFlight *inFlightSessions, sem chan struct{})
 			continue
 		}
 		for _, execReq := range execRequests {
+			key := execConfigKey(folder, execReq.Ordinal)
+			if !inFlightExecs.tryMark(key) {
+				continue
+			}
 			go func(folder, ordinal, path string) {
 				defer recoverPanic(fmt.Sprintf("processExecRequest[%s][exec_%s]", filepath.Base(folder), ordinal))
+				defer inFlightExecs.unmark(key)
 				processExecRequest(cfg, folder, ordinal, path)
 			}(folder, execReq.Ordinal, execReq.Path)
 		}
@@ -371,8 +424,13 @@ func pollOnce(cfg *config.Config, inFlight *inFlightSessions, sem chan struct{})
 			continue
 		}
 		for _, configReq := range configRequests {
+			key := execConfigKey(folder, configReq.Ordinal)
+			if !inFlightConfigs.tryMark(key) {
+				continue
+			}
 			go func(folder, ordinal, path string) {
 				defer recoverPanic(fmt.Sprintf("processConfigRequest[%s][config_%s]", filepath.Base(folder), ordinal))
+				defer inFlightConfigs.unmark(key)
 				processConfigRequest(cfg, folder, ordinal, path)
 			}(folder, configReq.Ordinal, configReq.Path)
 		}
@@ -680,12 +738,14 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 	}
 
 	result, err := shellexec.Invoke(shellexec.InvokeParams{
-		Command: payload.Command,
-		Workdir: conf.Workdir,
-		Timeout: time.Duration(cfg.TimeoutMinutes) * time.Minute,
+		Command:  payload.Command,
+		Workdir:  conf.Workdir,
+		Timeout:  time.Duration(cfg.TimeoutMinutes) * time.Minute,
+		AckDelay: time.Duration(cfg.ExecAckDelaySeconds) * time.Second,
 		OnLaunched: func() {
-			// Same ack mechanism as regular requests: drop an empty marker as
-			// soon as the shell command subprocess has launched successfully.
+			// Only reached if the command is still running after AckDelay —
+			// a fast exec-request just gets its exec-response, with no ack
+			// at all, since the response is proof enough it was picked up.
 			if err := os.WriteFile(session.AckPathFor(folder, ordinal), []byte("{}"), 0o644); err != nil {
 				log.Printf("ERROR: %v", err)
 			}
