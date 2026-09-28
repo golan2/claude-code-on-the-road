@@ -105,13 +105,26 @@ func DiscoverSessionFolders(root string) ([]string, error) {
 	return folders, nil
 }
 
+// dirHasRequestFile reports whether dir looks like a session folder at all —
+// i.e. it has ever received any kind of request file. It deliberately checks
+// exec-request and config-request files too, not just plain requests: a
+// folder that only ever received exec/config-requests (protocol misuse,
+// since those require a prior regular request to establish the session's
+// __session_conf.json) must still be discovered, so its requests get a
+// proper error response instead of being silently invisible forever.
 func dirHasRequestFile(dir string) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false, err
 	}
 	for _, e := range entries {
-		if !e.IsDir() && requestFilePattern.MatchString(e.Name()) {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if requestFilePattern.MatchString(name) ||
+			execRequestFilePattern.MatchString(name) ||
+			configRequestFilePattern.MatchString(name) {
 			return true, nil
 		}
 	}

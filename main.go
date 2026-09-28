@@ -6,15 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/golan2/claude-code-on-the-road/internal/applog"
 	"github.com/golan2/claude-code-on-the-road/internal/claudecode"
 	"github.com/golan2/claude-code-on-the-road/internal/config"
 	"github.com/golan2/claude-code-on-the-road/internal/response"
@@ -39,9 +42,19 @@ type inFlightSessions struct {
 func main() {
 	cfg, err := config.Load("config.json")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 		os.Exit(1)
 	}
+
+	logFile, err := applog.Init(cfg.LogFile)
+	if err != nil {
+		// Not fatal — GoApp keeps running with stdout-only logging rather
+		// than refusing to start over a log file it can't open.
+		log.Printf("ERROR: %v", err)
+	} else {
+		defer logFile.Close()
+	}
+	log.Printf("GoApp starting up (pid %d), logging to %s", os.Getpid(), cfg.LogFile)
 
 	writeStartupMarker(cfg.WatchFolder)
 	syncInstructions(cfg.WatchFolder)
@@ -80,11 +93,11 @@ func writeStartupMarker(watchFolder string) {
 	}
 	data, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 		return
 	}
 	if err := os.WriteFile(filepath.Join(watchFolder, startupMarkerFileName), data, 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 	}
 }
 
@@ -150,10 +163,10 @@ func migrateLegacyInstructionsFile(watchFolder, newPath string) {
 			continue
 		}
 		if err := os.Rename(legacyPath, newPath); err != nil {
-			fmt.Fprintln(os.Stderr, fmt.Errorf("migrate legacy instructions file %s to %s: %w", legacyPath, newPath, err))
+			log.Printf("ERROR: %v", fmt.Errorf("migrate legacy instructions file %s to %s: %w", legacyPath, newPath, err))
 			continue
 		}
-		fmt.Printf("Migrated Drive instructions file from legacy name %q to %q, preserving its Drive file identity\n", legacyName, instructionsFileName)
+		log.Printf("Migrated Drive instructions file from legacy name %q to %q, preserving its Drive file identity\n", legacyName, instructionsFileName)
 		return
 	}
 }
@@ -179,12 +192,12 @@ func migrateLegacyInstructionsFile(watchFolder, newPath string) {
 func syncInstructions(watchFolder string) {
 	localData, err := os.ReadFile(instructionsFileName)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, fmt.Errorf("read local %s: %w", instructionsFileName, err))
+		log.Printf("ERROR: %v", fmt.Errorf("read local %s: %w", instructionsFileName, err))
 		return
 	}
 	localVersion, ok := parseInstructionsVersion(localData)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "WARNING: local %s is missing a leading \"<!-- version: N -->\" header; skipping Drive sync\n", instructionsFileName)
+		log.Printf("WARNING: local %s is missing a leading \"<!-- version: N -->\" header; skipping Drive sync\n", instructionsFileName)
 		return
 	}
 
@@ -196,27 +209,27 @@ func syncInstructions(watchFolder string) {
 	driveData, err := os.ReadFile(drivePath)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			fmt.Fprintln(os.Stderr, fmt.Errorf("read drive %s: %w", instructionsFileName, err))
+			log.Printf("ERROR: %v", fmt.Errorf("read drive %s: %w", instructionsFileName, err))
 			return
 		}
 		if err := os.WriteFile(drivePath, localData, 0o644); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			log.Printf("ERROR: %v", err)
 			return
 		}
-		fmt.Printf("Synced instructions to Drive root (created, version %d)\n", localVersion)
+		log.Printf("Synced instructions to Drive root (created, version %d)\n", localVersion)
 		return
 	}
 
 	if driveVersion, ok := parseInstructionsVersion(driveData); ok && driveVersion >= localVersion {
-		fmt.Printf("Instructions in Drive root are already up to date (version %d)\n", driveVersion)
+		log.Printf("Instructions in Drive root are already up to date (version %d)\n", driveVersion)
 		return
 	}
 
 	if err := os.WriteFile(drivePath, localData, 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 		return
 	}
-	fmt.Printf("Synced instructions to Drive root (updated to version %d)\n", localVersion)
+	log.Printf("Synced instructions to Drive root (updated to version %d)\n", localVersion)
 }
 
 // recentSessionsCount is how many of the most recently active session folders
@@ -229,7 +242,7 @@ const recentSessionsCount = 3
 func printRecentSessions(watchFolder string) {
 	folders, err := session.DiscoverSessionFolders(watchFolder)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 		return
 	}
 
@@ -241,7 +254,7 @@ func printRecentSessions(watchFolder string) {
 	for _, folder := range folders {
 		latest, ok, err := session.LatestActivity(folder)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			log.Printf("ERROR: %v", err)
 			continue
 		}
 		if !ok {
@@ -258,12 +271,12 @@ func printRecentSessions(watchFolder string) {
 	}
 
 	if len(activities) == 0 {
-		fmt.Println("Recent sessions: none found")
+		log.Println("Recent sessions: none found")
 		return
 	}
-	fmt.Println("Recent sessions:")
+	log.Println("Recent sessions:")
 	for _, a := range activities {
-		fmt.Printf("  %s - last activity %s\n", a.name, a.latest.Format(time.RFC3339))
+		log.Printf("  %s - last activity %s\n", a.name, a.latest.Format(time.RFC3339))
 	}
 }
 
@@ -276,7 +289,7 @@ func printRecentSessions(watchFolder string) {
 func recoverStuckSessions(cfg *config.Config, inFlight *inFlightSessions, sem chan struct{}) {
 	folders, err := session.DiscoverSessionFolders(cfg.WatchFolder)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 		return
 	}
 
@@ -285,23 +298,24 @@ func recoverStuckSessions(cfg *config.Config, inFlight *inFlightSessions, sem ch
 
 		stuck, err := session.FindStuckRequest(folder)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			log.Printf("ERROR: %v", err)
 			continue
 		}
 		if stuck.Anomaly {
-			fmt.Fprintf(os.Stderr, "WARNING: [%s] unanswered request ordinals %v violate the sequential processing guarantee (expected at most the highest ordinal to be unanswered) — skipping automatic recovery for this session, investigate manually\n", sessionName, stuck.Unanswered)
+			log.Printf("WARNING: [%s] unanswered request ordinals %v violate the sequential processing guarantee (expected at most the highest ordinal to be unanswered) — skipping automatic recovery for this session, investigate manually\n", sessionName, stuck.Unanswered)
 			continue
 		}
 		if !stuck.Found {
 			continue
 		}
 
-		fmt.Printf("[%s][request_%s] - stuck from a previous run, reprocessing\n", sessionName, stuck.Ordinal)
+		log.Printf("[%s][request_%s] - stuck from a previous run, reprocessing\n", sessionName, stuck.Ordinal)
 
 		if !inFlight.tryMark(folder) {
 			continue
 		}
 		go func(folder, ordinal, requestFilePath string) {
+			defer recoverPanic(fmt.Sprintf("processRequest[%s][request_%s]", filepath.Base(folder), ordinal))
 			sem <- struct{}{}
 			defer func() {
 				<-sem
@@ -315,20 +329,20 @@ func recoverStuckSessions(cfg *config.Config, inFlight *inFlightSessions, sem ch
 func pollOnce(cfg *config.Config, inFlight *inFlightSessions, sem chan struct{}) {
 	folders, err := session.DiscoverSessionFolders(cfg.WatchFolder)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 		return
 	}
-
 	for _, folder := range folders {
 		if inFlight.tryMark(folder) {
 			ordinal, requestFilePath, found, err := session.NextPendingRequest(folder)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
+				log.Printf("ERROR: %v", err)
 				inFlight.unmark(folder)
 			} else if !found {
 				inFlight.unmark(folder)
 			} else {
 				go func(folder, ordinal, requestFilePath string) {
+					defer recoverPanic(fmt.Sprintf("processRequest[%s][request_%s]", filepath.Base(folder), ordinal))
 					sem <- struct{}{}
 					defer func() {
 						<-sem
@@ -341,20 +355,26 @@ func pollOnce(cfg *config.Config, inFlight *inFlightSessions, sem chan struct{})
 
 		execRequests, err := session.PendingExecRequests(folder)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			log.Printf("ERROR: %v", err)
 			continue
 		}
 		for _, execReq := range execRequests {
-			go processExecRequest(cfg, folder, execReq.Ordinal, execReq.Path)
+			go func(folder, ordinal, path string) {
+				defer recoverPanic(fmt.Sprintf("processExecRequest[%s][exec_%s]", filepath.Base(folder), ordinal))
+				processExecRequest(cfg, folder, ordinal, path)
+			}(folder, execReq.Ordinal, execReq.Path)
 		}
 
 		configRequests, err := session.PendingConfigRequests(folder)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			log.Printf("ERROR: %v", err)
 			continue
 		}
 		for _, configReq := range configRequests {
-			go processConfigRequest(cfg, folder, configReq.Ordinal, configReq.Path)
+			go func(folder, ordinal, path string) {
+				defer recoverPanic(fmt.Sprintf("processConfigRequest[%s][config_%s]", filepath.Base(folder), ordinal))
+				processConfigRequest(cfg, folder, ordinal, path)
+			}(folder, configReq.Ordinal, configReq.Path)
 		}
 	}
 }
@@ -375,9 +395,24 @@ func (s *inFlightSessions) unmark(folder string) {
 	delete(s.processing, folder)
 }
 
+// recoverPanic recovers from and logs a panic in the goroutine it's deferred
+// in, stack trace included. An unrecovered panic in any goroutine kills the
+// entire process — silently, from the user's point of view, since the only
+// trace of it would have been a stray stderr line in a terminal window
+// nobody is watching. That would explain symptoms like "I sent two requests
+// and neither ever got a response": the first one's handler panicked, took
+// the whole process down mid-flight, and polling simply never resumed.
+// Wrapping every goroutine with this turns that into a logged, recoverable
+// event instead of an invisible process death.
+func recoverPanic(label string) {
+	if r := recover(); r != nil {
+		log.Printf("PANIC recovered in %s: %v\n%s", label, r, debug.Stack())
+	}
+}
+
 func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string) {
 	sessionName := filepath.Base(folder)
-	fmt.Printf("[%s][request_%s] - sent to Claude Code\n", sessionName, ordinal)
+	log.Printf("[%s][request_%s] - sent to Claude Code\n", sessionName, ordinal)
 
 	payload, err := loadRequest(requestFilePath)
 	if err != nil {
@@ -409,13 +444,24 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		if payload.PermissionMode != "" {
 			permissionMode = payload.PermissionMode
 		}
+		if permissionMode == "" {
+			// The existing __session_conf.json may have been created by an
+			// exec-request bootstrapping a no-CC session, which never sets a
+			// permission mode since it never invokes Claude Code. This is the
+			// folder's first-ever Claude Code request, so fall back to the
+			// configured default exactly as a brand-new session would.
+			permissionMode = cfg.PermissionMode
+		}
 		resumeSessionID = conf.SessionID
 	}
 
 	tracker := claudecode.NewProgressTracker()
 	statusDone := make(chan struct{})
 	var finished atomic.Bool
-	go runStatusRequestWatcher(folder, ordinal, &finished, tracker, statusDone)
+	go func() {
+		defer recoverPanic(fmt.Sprintf("runStatusRequestWatcher[%s][request_%s]", sessionName, ordinal))
+		runStatusRequestWatcher(folder, ordinal, &finished, tracker, statusDone)
+	}()
 
 	invokeResult, err := claudecode.Invoke(claudecode.InvokeParams{
 		Prompt:          payload.Prompt,
@@ -430,7 +476,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 			// PhoneClaude knows the request was picked up, long before the
 			// final response exists. Content is irrelevant; existence-only.
 			if err := os.WriteFile(session.AckPathFor(folder, ordinal), []byte("{}"), 0o644); err != nil {
-				fmt.Fprintln(os.Stderr, err)
+				log.Printf("ERROR: %v", err)
 			}
 		},
 	})
@@ -448,26 +494,37 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	}
 
 	if err := response.Write(session.ResponsePathFor(requestFilePath), resp); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 	}
 
-	if isNewSession && resp.SessionID != "" {
+	// A folder's __session_conf.json may already exist with no SessionID —
+	// a no-CC session, bootstrapped by an exec-request, running its first
+	// Claude Code request here for the first time. That case must persist
+	// the newly-obtained SessionID too, same as a brand-new session, not
+	// just a changed permission mode.
+	gainedSessionID := !isNewSession && conf.SessionID == "" && resp.SessionID != ""
+	switch {
+	case isNewSession && resp.SessionID != "":
 		err = session.SaveSessionConf(folder, &session.SessionConf{
 			SessionID:      resp.SessionID,
 			Workdir:        workdir,
 			PermissionMode: permissionMode,
 		})
-	} else if !isNewSession && permissionMode != conf.PermissionMode {
+	case !isNewSession && (permissionMode != conf.PermissionMode || gainedSessionID):
+		sessionID := conf.SessionID
+		if gainedSessionID {
+			sessionID = resp.SessionID
+		}
 		err = session.SaveSessionConf(folder, &session.SessionConf{
-			SessionID:      conf.SessionID,
+			SessionID:      sessionID,
 			Workdir:        conf.Workdir,
 			PermissionMode: permissionMode,
 		})
-	} else {
+	default:
 		err = nil
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 	}
 
 	printCompletion(resp.Outcome, ordinal, sessionName)
@@ -497,7 +554,7 @@ func runStatusRequestWatcher(
 		case <-ticker.C:
 			counters, err := session.StatusRequestCounters(sessionFolderPath, ordinal)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
+				log.Printf("ERROR: %v", err)
 				continue
 			}
 			for _, c := range counters {
@@ -521,11 +578,11 @@ func runStatusRequestWatcher(
 func writeStatusResponse(path string, p claudecode.Progress) {
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 		return
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 	}
 }
 
@@ -551,24 +608,25 @@ func writeRequestError(requestFilePath, ordinal, sessionName, message string) {
 		Error:   &response.ErrorDetail{Message: message},
 	}
 	if err := response.Write(session.ResponsePathFor(requestFilePath), resp); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 	}
-	fmt.Printf("ERROR: [%s][response_%s] - written to folder\n", sessionName, ordinal)
+	log.Printf("ERROR: [%s][response_%s] - written to folder\n", sessionName, ordinal)
 }
 
 func printCompletion(outcome, ordinal, sessionName string) {
 	switch outcome {
 	case response.OutcomeSuccess:
-		fmt.Printf("[%s][response_%s] - written to folder\n", sessionName, ordinal)
+		log.Printf("[%s][response_%s] - written to folder\n", sessionName, ordinal)
 	case response.OutcomeClaudeCodeError:
-		fmt.Printf("ERROR: [%s][response_%s] - written to folder\n", sessionName, ordinal)
+		log.Printf("ERROR: [%s][response_%s] - written to folder\n", sessionName, ordinal)
 	case response.OutcomeTimeout:
-		fmt.Printf("TIMEOUT: [%s][response_%s] - written to folder\n", sessionName, ordinal)
+		log.Printf("TIMEOUT: [%s][response_%s] - written to folder\n", sessionName, ordinal)
 	}
 }
 
 type execRequestPayload struct {
 	Command string `json:"command"`
+	Workdir string `json:"workdir,omitempty"`
 }
 
 func loadExecRequest(path string) (*execRequestPayload, error) {
@@ -589,7 +647,7 @@ func loadExecRequest(path string) (*execRequestPayload, error) {
 
 func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath string) {
 	sessionName := filepath.Base(folder)
-	fmt.Printf("[%s][exec_%s] - running shell command\n", sessionName, ordinal)
+	log.Printf("[%s][exec_%s] - running shell command\n", sessionName, ordinal)
 
 	payload, err := loadExecRequest(execRequestFilePath)
 	if err != nil {
@@ -603,8 +661,22 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 		return
 	}
 	if conf == nil {
-		writeExecError(execRequestFilePath, ordinal, sessionName, "no session configuration found; exec requests require a prior regular request in this session")
-		return
+		// No session has ever been established in this folder — support a
+		// no-CC session: one that only ever runs exec-requests and never
+		// invokes Claude Code at all. Same rule as a regular request's first
+		// message: workdir is required exactly once, to bootstrap the
+		// session, and __session_conf.json is created with no SessionID
+		// (there is no Claude Code session yet, and there may never be one).
+		if payload.Workdir == "" {
+			writeExecError(execRequestFilePath, ordinal, sessionName, "workdir is required on the first request of a new session (no session configuration found yet)")
+			return
+		}
+		conf = &session.SessionConf{Workdir: payload.Workdir}
+		if err := session.SaveSessionConf(folder, conf); err != nil {
+			writeExecError(execRequestFilePath, ordinal, sessionName, fmt.Sprintf("failed to save __session_conf.json: %v", err))
+			return
+		}
+		log.Printf("[%s][exec_%s] - initialized new no-CC session with workdir %s\n", sessionName, ordinal, conf.Workdir)
 	}
 
 	result, err := shellexec.Invoke(shellexec.InvokeParams{
@@ -615,7 +687,7 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 			// Same ack mechanism as regular requests: drop an empty marker as
 			// soon as the shell command subprocess has launched successfully.
 			if err := os.WriteFile(session.AckPathFor(folder, ordinal), []byte("{}"), 0o644); err != nil {
-				fmt.Fprintln(os.Stderr, err)
+				log.Printf("ERROR: %v", err)
 			}
 		},
 	})
@@ -632,13 +704,13 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 	}
 
 	if err := response.Write(session.ExecResponsePathFor(execRequestFilePath), resp); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 	}
 
 	if resp.Error != "" {
-		fmt.Printf("ERROR: [%s][exec_response_%s] - %s\n", sessionName, ordinal, resp.Error)
+		log.Printf("ERROR: [%s][exec_response_%s] - %s\n", sessionName, ordinal, resp.Error)
 	} else {
-		fmt.Printf("[%s][exec_response_%s] - written to folder (exit %d)\n", sessionName, ordinal, resp.ExitCode)
+		log.Printf("[%s][exec_response_%s] - written to folder (exit %d)\n", sessionName, ordinal, resp.ExitCode)
 	}
 }
 
@@ -649,9 +721,9 @@ func writeExecError(execRequestFilePath, ordinal, sessionName, message string) {
 		Truncated: false,
 	}
 	if err := response.Write(session.ExecResponsePathFor(execRequestFilePath), resp); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 	}
-	fmt.Printf("ERROR: [%s][exec_response_%s] - %s\n", sessionName, ordinal, message)
+	log.Printf("ERROR: [%s][exec_response_%s] - %s\n", sessionName, ordinal, message)
 }
 
 type configRequestPayload struct {
@@ -679,7 +751,7 @@ func loadConfigRequest(path string) (*configRequestPayload, error) {
 // NNNNN_config_response.json written from the in-memory cfg.
 func processConfigRequest(cfg *config.Config, folder, ordinal, configRequestFilePath string) {
 	sessionName := filepath.Base(folder)
-	fmt.Printf("[%s][config_%s] - resolving config key\n", sessionName, ordinal)
+	log.Printf("[%s][config_%s] - resolving config key\n", sessionName, ordinal)
 
 	payload, err := loadConfigRequest(configRequestFilePath)
 	if err != nil {
@@ -689,20 +761,20 @@ func processConfigRequest(cfg *config.Config, folder, ordinal, configRequestFile
 
 	resp := response.BuildConfig(cfg, payload.Key)
 	if err := response.Write(session.ConfigResponsePathFor(configRequestFilePath), resp); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 	}
 
 	if resp.Error != "" {
-		fmt.Printf("ERROR: [%s][config_response_%s] - %s\n", sessionName, ordinal, resp.Error)
+		log.Printf("ERROR: [%s][config_response_%s] - %s\n", sessionName, ordinal, resp.Error)
 	} else {
-		fmt.Printf("[%s][config_response_%s] - written to folder\n", sessionName, ordinal)
+		log.Printf("[%s][config_response_%s] - written to folder\n", sessionName, ordinal)
 	}
 }
 
 func writeConfigError(configRequestFilePath, ordinal, sessionName, message string) {
 	resp := &response.ConfigResponse{Error: message}
 	if err := response.Write(session.ConfigResponsePathFor(configRequestFilePath), resp); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Printf("ERROR: %v", err)
 	}
-	fmt.Printf("ERROR: [%s][config_response_%s] - %s\n", sessionName, ordinal, message)
+	log.Printf("ERROR: [%s][config_response_%s] - %s\n", sessionName, ordinal, message)
 }

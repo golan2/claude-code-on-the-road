@@ -22,6 +22,9 @@ go.work.sum
 # Env files
 .env
 
+# GoApp runtime log (see logFile in config.json)
+goapp.log
+
 # IDE
 .idea/
 .vscode/

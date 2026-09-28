@@ -12,6 +12,7 @@ const (
 	defaultPermissionMode        = "bypassPermissions"
 	defaultMaxConcurrentSessions = 10
 	defaultExecOutputMaxChars    = 30000
+	defaultLogFile               = "goapp.log"
 )
 
 // SimpleRepository is one entry of the simpleRepositories config list,
@@ -34,6 +35,9 @@ type SimpleRepository struct {
 //     from "configured but empty".
 //   - Acronyms: backs the "acronyms" config-request key; independent of SimpleRepositories, left nil
 //     (not defaulted to an empty map) when absent from the config file for the same reason.
+//   - LogFile: path (relative to the working directory GoApp is run from, same convention as the
+//     config file path itself) of the append-only log file GoApp writes every event to, in addition
+//     to stdout. Defaults to "goapp.log" when absent from the config file.
 type Config struct {
 	WatchFolder           string             `json:"watchFolder"`
 	PollIntervalSeconds   int                `json:"pollIntervalSeconds"`
@@ -43,6 +47,7 @@ type Config struct {
 	ExecOutputMaxChars    int                `json:"execOutputMaxChars"`
 	SimpleRepositories    []SimpleRepository `json:"simpleRepositories"`
 	Acronyms              map[string]string  `json:"acronyms"`
+	LogFile               string             `json:"logFile"`
 }
 
 // Load reads the JSON configuration at path, applies defaults, and validates it.
@@ -81,6 +86,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.ExecOutputMaxChars == 0 {
 		cfg.ExecOutputMaxChars = defaultExecOutputMaxChars
+	}
+	if cfg.LogFile == "" {
+		cfg.LogFile = defaultLogFile
 	}
 }
 
