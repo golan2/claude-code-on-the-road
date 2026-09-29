@@ -16,12 +16,24 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
 const stateFileName = "skills_state.json"
 
 const skillManifestName = "SKILL.md"
+
+// claudeSkillsSubdir is the path, relative to CopyDir, that the `claude` CLI
+// actually scans for skills when CopyDir is passed as a --add-dir. Confirmed
+// empirically: --add-dir only discovers skills directly under
+// "<dir>/.claude/skills/<skill-name>/SKILL.md" — a skill one level deeper
+// (e.g. "<dir>/.claude/skills/<group>/<skill-name>") or placed directly under
+// <dir> without this prefix is never discovered. Every copied skill's
+// destination folder must therefore be an immediate child of this path, which
+// is also why rootIdentifiers get folded into the destination folder's own
+// name (skillDestName) instead of forming a further subdirectory level.
+const claudeSkillsSubdir = ".claude/skills"
 
 // disableModelInvocationPattern matches a SKILL.md frontmatter line setting
 // disable-model-invocation to true. Only ever rewritten when present — a
@@ -90,7 +102,7 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 				logf("ERROR: skillscopy: %v", err)
 				continue
 			}
-			destSkillDir := filepath.Join(cfg.CopyDir, rootIdentifiers[root], relSkill)
+			destSkillDir := filepath.Join(cfg.CopyDir, filepath.FromSlash(claudeSkillsSubdir), skillDestName(rootIdentifiers[root], relSkill))
 
 			err = filepath.WalkDir(skillDir, func(srcFile string, d fs.DirEntry, err error) error {
 				if err != nil || d.IsDir() {
@@ -144,11 +156,12 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 	return nil
 }
 
-// assignRootIdentifiers picks the directory-safe identifier each source root
-// is mirrored under inside CopyDir, preserving hierarchy so two roots that
-// happen to share a basename (e.g. two different "skills" folders) don't
-// collide. The common case (distinctly-named roots) gets a plain, readable
-// basename; a collision gets a numeric suffix by order of appearance.
+// assignRootIdentifiers picks the identifier each source root is known by
+// when folded into a destination folder name via skillDestName, so two roots
+// that happen to share a basename (e.g. two different "skills" folders)
+// don't collide. The common case (distinctly-named roots) gets a plain,
+// readable basename; a collision gets a numeric suffix by order of
+// appearance.
 func assignRootIdentifiers(roots []string) map[string]string {
 	ids := make(map[string]string, len(roots))
 	counts := make(map[string]int)
@@ -162,6 +175,19 @@ func assignRootIdentifiers(roots []string) map[string]string {
 		}
 	}
 	return ids
+}
+
+// skillDestName builds the single path segment a copied skill lives under
+// inside claudeSkillsSubdir. Every copy must be an immediate child of
+// claudeSkillsSubdir (see its doc comment), so hierarchy that would otherwise
+// be expressed as nested directories — which source root a skill came from,
+// and any subdirectory structure within that root (e.g. a root that groups
+// skills under its own subfolder) — is instead folded into this one folder
+// name, joined with "__", so provenance stays visible and two
+// differently-sourced skills sharing a name still can't collide.
+func skillDestName(rootID, relSkill string) string {
+	flatRelSkill := strings.ReplaceAll(filepath.ToSlash(relSkill), "/", "--")
+	return rootID + "__" + flatRelSkill
 }
 
 // discoverSkillDirs finds every skill directory under root — one directly

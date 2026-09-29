@@ -11,8 +11,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,9 +29,10 @@ import (
 )
 
 type requestPayload struct {
-	Prompt         string `json:"prompt"`
-	Workdir        string `json:"workdir,omitempty"`
-	PermissionMode string `json:"permissionMode,omitempty"`
+	Prompt         string   `json:"prompt"`
+	Workdir        string   `json:"workdir,omitempty"`
+	PermissionMode string   `json:"permissionMode,omitempty"`
+	Skills         []string `json:"skills,omitempty"`
 }
 
 // inFlightSessions keeps track of all Claude Code invocations that are in progress and awaiting a response.
@@ -512,6 +515,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 
 	isNewSession := conf == nil
 	var workdir, permissionMode, resumeSessionID string
+	var skills []string
 	if isNewSession {
 		if payload.Workdir == "" {
 			writeRequestError(requestFilePath, ordinal, sessionName, "workdir is required on the first request of a new session")
@@ -522,6 +526,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		if permissionMode == "" {
 			permissionMode = cfg.PermissionMode
 		}
+		skills = payload.Skills
 	} else {
 		workdir = conf.Workdir
 		permissionMode = conf.PermissionMode
@@ -537,6 +542,15 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 			permissionMode = cfg.PermissionMode
 		}
 		resumeSessionID = conf.SessionID
+		skills = conf.Skills
+		if len(payload.Skills) > 0 {
+			skills = payload.Skills
+		}
+	}
+
+	prompt := payload.Prompt
+	if len(skills) > 0 {
+		prompt += fmt.Sprintf("\n\nFor this task, use the following skill(s): %s.", strings.Join(skills, ", "))
 	}
 
 	tracker := claudecode.NewProgressTracker()
@@ -548,7 +562,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	}()
 
 	invokeResult, err := claudecode.Invoke(claudecode.InvokeParams{
-		Prompt:          payload.Prompt,
+		Prompt:          prompt,
 		Workdir:         workdir,
 		PermissionMode:  permissionMode,
 		AddDirs:         []string{folder, cfg.SkillsCopyDir},
@@ -593,8 +607,9 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 			SessionID:      resp.SessionID,
 			Workdir:        workdir,
 			PermissionMode: permissionMode,
+			Skills:         skills,
 		})
-	case !isNewSession && (permissionMode != conf.PermissionMode || gainedSessionID):
+	case !isNewSession && (permissionMode != conf.PermissionMode || !slices.Equal(skills, conf.Skills) || gainedSessionID):
 		sessionID := conf.SessionID
 		if gainedSessionID {
 			sessionID = resp.SessionID
@@ -603,6 +618,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 			SessionID:      sessionID,
 			Workdir:        conf.Workdir,
 			PermissionMode: permissionMode,
+			Skills:         skills,
 		})
 	default:
 		err = nil

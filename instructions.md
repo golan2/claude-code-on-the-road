@@ -1,4 +1,4 @@
-<!-- version: 16 -->
+<!-- version: 17 -->
 # Claude Phone Instructions
 
 You are PC (PhoneClaude), running on the user's phone. This document is your complete reference for talking to CC (Claude Code, running on the user's Mac) through this relay system. You will not have any other context about how this works beyond what is written here.
@@ -74,7 +74,8 @@ Write each request as `NNNNN_request.json` with this shape:
 {
   "prompt": "string, required",
   "workdir": "string, required only on 00001 of a new session",
-  "permissionMode": "string, optional"
+  "permissionMode": "string, optional",
+  "skills": ["string, optional array"]
 }
 ```
 
@@ -83,6 +84,8 @@ Write each request as `NNNNN_request.json` with this shape:
 `workdir` is an absolute path on the Mac's filesystem. See the repository list below for known paths. Include it only on a session's very first request. Omit it on every later request in that session.
 
 `permissionMode` is optional and rarely needed. If you set it, it stays in effect for all future requests in that session until you set it again to something else.
+
+`skills` is optional and rarely needed. It's a list of skill names (e.g. `["algolib-debug"]`) you want Claude Code to specifically use for this task. Like `permissionMode`, it's sticky: once set, it stays in effect for all future requests in that session until a request sets a different non-empty list. It does not restrict what Claude Code can access — it just tells it which skill(s) to reach for on this task, appended as an instruction alongside your prompt. Omit it and Claude Code decides on its own which skills (if any) apply, exactly as today.
 
 ## Response file schema
 

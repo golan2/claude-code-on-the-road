@@ -31,9 +31,10 @@ var (
 
 // SessionConf holds the per-session metadata stored in __session_conf.json.
 type SessionConf struct {
-	SessionID      string `json:"sessionId"`
-	Workdir        string `json:"workdir"`
-	PermissionMode string `json:"permissionMode"`
+	SessionID      string   `json:"sessionId"`
+	Workdir        string   `json:"workdir"`
+	PermissionMode string   `json:"permissionMode"`
+	Skills         []string `json:"skills,omitempty"`
 }
 
 // LoadSessionConf reads __session_conf.json from sessionFolderPath. It returns
