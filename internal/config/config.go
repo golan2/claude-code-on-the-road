@@ -16,7 +16,6 @@ const (
 	defaultExecOutputMaxChars        = 30000
 	defaultLogFile                   = "goapp.log"
 	defaultExecAckDelaySeconds       = 5
-	defaultSkillsCopyDir             = "/tmp/ccotr-skills"
 	defaultSkillsCopyIntervalSeconds = 300
 )
 
@@ -52,7 +51,8 @@ type SimpleRepository struct {
 //     (not defaulted to any path) when absent from the config file — skill copying is simply skipped.
 //   - SkillsCopyDir: the shared directory GoApp copies every discovered skill into, with
 //     disable-model-invocation stripped in each copy, hierarchy preserved per SkillPaths root. Passed
-//     to every Claude Code invocation as an extra --add-dir. Defaults to "/tmp/ccotr-skills".
+//     to every Claude Code invocation as an extra --add-dir. No code-level default: it must be set in
+//     the config file and must already exist on disk, or Load fails fast at startup.
 //   - SkillsCopyIntervalSeconds: how often, in seconds, GoApp re-scans SkillPaths for changed or
 //     deleted skill files and re-copies/cleans up accordingly. Defaults to 300 (5 minutes).
 type Config struct {
@@ -114,9 +114,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.ExecAckDelaySeconds == 0 {
 		cfg.ExecAckDelaySeconds = defaultExecAckDelaySeconds
 	}
-	if cfg.SkillsCopyDir == "" {
-		cfg.SkillsCopyDir = defaultSkillsCopyDir
-	}
 	cfg.SkillsCopyDir = expandHome(cfg.SkillsCopyDir)
 	if cfg.SkillsCopyIntervalSeconds == 0 {
 		cfg.SkillsCopyIntervalSeconds = defaultSkillsCopyIntervalSeconds
@@ -155,6 +152,18 @@ func validate(cfg *Config) error {
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("watchFolder %q is not a directory", cfg.WatchFolder)
+	}
+
+	if cfg.SkillsCopyDir == "" {
+		return fmt.Errorf("skillsCopyDir is required")
+	}
+
+	skillsInfo, err := os.Stat(cfg.SkillsCopyDir)
+	if err != nil {
+		return fmt.Errorf("skillsCopyDir %q does not exist: %w", cfg.SkillsCopyDir, err)
+	}
+	if !skillsInfo.IsDir() {
+		return fmt.Errorf("skillsCopyDir %q is not a directory", cfg.SkillsCopyDir)
 	}
 
 	return nil
