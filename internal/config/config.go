@@ -66,7 +66,7 @@ type Config struct {
 	Acronyms                  map[string]string  `json:"acronyms"`
 	LogFile                   string             `json:"logFile"`
 	ExecAckDelaySeconds       int                `json:"execAckDelaySeconds"`
-	SkillPaths                []string           `json:"skill_paths"`
+	SkillPaths                []string           `json:"skillPaths"`
 	SkillsCopyDir             string             `json:"skillsCopyDir"`
 	SkillsCopyIntervalSeconds int                `json:"skillsCopyIntervalSeconds"`
 }

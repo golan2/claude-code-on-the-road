@@ -4,9 +4,10 @@
   "timeoutMinutes": 10,
   "permissionMode": "bypassPermissions",
   "maxConcurrentSessions": 10,
-  "skill_paths": [
-    "~/.claude/skills",
-    "~/Documents/claude-code-skills"
+  "skillPaths": [
+    "/Users/izikgolan/.claude/skills",
+    "/Users/izikgolan/Documents/claude-code-skills/",
+    "/Users/izikgolan/git/platform/imu-claude"
   ],
   "simpleRepositories": [
     { "nickname": "algolib", "path": "/Users/izikgolan/git/platform/algolib" },
