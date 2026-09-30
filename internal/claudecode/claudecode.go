@@ -47,6 +47,7 @@ type ProgressTracker struct {
 	startedAt     time.Time
 	lastToolCall  string
 	partialOutput string
+	invokedSkills map[string]bool
 }
 
 // NewProgressTracker starts a tracker with its clock running from now.
@@ -77,15 +78,48 @@ func (t *ProgressTracker) appendText(text string) {
 	t.partialOutput += text
 }
 
+func (t *ProgressTracker) recordSkillInvocation(name string) {
+	if name == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.invokedSkills == nil {
+		t.invokedSkills = make(map[string]bool)
+	}
+	t.invokedSkills[name] = true
+}
+
+// InvokedSkills returns the names of every skill the Skill tool was actually
+// called with during this invocation, gathered live from the "skill" field of
+// each Skill tool_use event as it streamed by — not from the prompt text sent
+// to claude, so it reflects what genuinely happened rather than what was
+// merely requested. Order is not meaningful. Safe to call once the
+// invocation has finished; the underlying map is no longer written to at
+// that point.
+func (t *ProgressTracker) InvokedSkills() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	names := make([]string, 0, len(t.invokedSkills))
+	for name := range t.invokedSkills {
+		names = append(names, name)
+	}
+	return names
+}
+
 // streamEvent is the subset of the claude CLI's --output-format stream-json
-// event shape needed to track tool calls and partial assistant text.
+// event shape needed to track tool calls, assistant text, and which skills
+// were actually invoked (via the Skill tool's own "skill" input field).
 type streamEvent struct {
 	Type    string `json:"type"`
 	Message struct {
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-			Name string `json:"name"`
+			Type  string `json:"type"`
+			Text  string `json:"text"`
+			Name  string `json:"name"`
+			Input struct {
+				Skill string `json:"skill"`
+			} `json:"input"`
 		} `json:"content"`
 	} `json:"message"`
 }
@@ -198,6 +232,9 @@ func handleStreamLine(line string, progress *ProgressTracker) {
 		switch block.Type {
 		case "tool_use":
 			progress.recordToolCall(block.Name)
+			if block.Name == "Skill" {
+				progress.recordSkillInvocation(block.Input.Skill)
+			}
 		case "text":
 			progress.appendText(block.Text)
 		}

@@ -581,6 +581,10 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	finished.Store(true)
 	close(statusDone)
 
+	if err == nil && len(skills) > 0 {
+		logMissingSkillInvocations(sessionName, ordinal, skills, tracker.InvokedSkills())
+	}
+
 	var resp *response.Response
 	if err != nil {
 		resp = &response.Response{
@@ -671,6 +675,25 @@ func runStatusRequestWatcher(
 			}
 		case <-done:
 			return
+		}
+	}
+}
+
+// logMissingSkillInvocations warns, per session/ordinal, about any name in
+// requestedSkills that never showed up as a Skill tool_use event's "skill"
+// input during the invocation (invokedSkills, from tracker.InvokedSkills()).
+// The requested-skills instruction appended to the prompt (see processRequest)
+// is a request to the model, not a guarantee — this is how GoApp notices, and
+// surfaces via its own log rather than silently, on the rare occasion Claude
+// Code doesn't actually invoke a skill it was asked to use.
+func logMissingSkillInvocations(sessionName, ordinal string, requestedSkills, invokedSkills []string) {
+	invoked := make(map[string]bool, len(invokedSkills))
+	for _, name := range invokedSkills {
+		invoked[name] = true
+	}
+	for _, name := range requestedSkills {
+		if !invoked[name] {
+			log.Printf("WARNING: [%s][request_%s] requested skill %q was not observed to be invoked in this response\n", sessionName, ordinal, name)
 		}
 	}
 }
