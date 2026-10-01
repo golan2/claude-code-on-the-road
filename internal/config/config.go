@@ -46,13 +46,14 @@ type SimpleRepository struct {
 //     before GoApp writes its NNNNN_ack.json. A command that finishes within this window gets no
 //     ack at all — its NNNNN_exec_response.json is the only signal PC needs, since it arrives just
 //     as fast. Defaults to 5 when absent from the config file.
-//   - SkillPaths: a manually-curated list of root directories to copy skills from (see
-//     HLD-skills-support.md). Each entry may start with "~/" for the user's home directory. Left nil
-//     (not defaulted to any path) when absent from the config file — skill copying is simply skipped.
+//   - SkillPaths: a manually-curated list of root directories to copy skills from. Each entry may
+//     start with "~/" for the user's home directory. Left nil (not defaulted to any path) when absent
+//     from the config file — skill copying is simply skipped.
 //   - SkillsCopyDir: the shared directory GoApp copies every discovered skill into, with
 //     disable-model-invocation stripped in each copy, hierarchy preserved per SkillPaths root. Passed
 //     to every Claude Code invocation as an extra --add-dir. No code-level default: it must be set in
-//     the config file and must already exist on disk, or Load fails fast at startup.
+//     the config file and must already exist on disk, or Load fails fast at startup. Also backs the
+//     "skillsCopyDir" config-request key.
 //   - SkillsCopyIntervalSeconds: how often, in seconds, GoApp re-scans SkillPaths for changed or
 //     deleted skill files and re-copies/cleans up accordingly. Defaults to 300 (5 minutes).
 type Config struct {

@@ -127,6 +127,11 @@ func BuildConfig(cfg *config.Config, key string) *ConfigResponse {
 			return &ConfigResponse{Key: key, Error: fmt.Sprintf("config key %q is not present in config.json", key)}
 		}
 		return &ConfigResponse{Key: key, Value: cfg.Acronyms}
+	case "skillsCopyDir":
+		if cfg.SkillsCopyDir == "" {
+			return &ConfigResponse{Key: key, Error: fmt.Sprintf("config key %q is not present in config.json", key)}
+		}
+		return &ConfigResponse{Key: key, Value: cfg.SkillsCopyDir}
 	default:
 		return &ConfigResponse{Key: key, Error: fmt.Sprintf("unknown config key %q", key)}
 	}
