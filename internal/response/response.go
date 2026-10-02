@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
+	"strings"
 
 	"github.com/golan2/claude-code-on-the-road/internal/claudecode"
 	"github.com/golan2/claude-code-on-the-road/internal/config"
@@ -111,30 +113,28 @@ type ConfigResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
-// BuildConfig resolves a config-request's key against cfg. It fails fast with
-// an ConfigResponse.Error (never partial data or a retry) when key is not one
-// of the supported config-request keys, or when its backing config.json field
-// was left unset.
+// BuildConfig resolves a config-request's key against cfg by reflecting over
+// cfg's fields and matching key against each field's JSON tag name — any
+// field in config.Config is queryable this way, with no per-key code. It
+// fails fast with a ConfigResponse.Error (never partial data or a retry) when
+// key doesn't match any field's JSON tag, or when the matched field was left
+// at its zero value (i.e. not present in config.json).
 func BuildConfig(cfg *config.Config, key string) *ConfigResponse {
-	switch key {
-	case "simple_repositories":
-		if cfg.SimpleRepositories == nil {
+	v := reflect.ValueOf(cfg).Elem()
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("json")
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "" || name == "-" || name != key {
+			continue
+		}
+		fv := v.Field(i)
+		if fv.IsZero() {
 			return &ConfigResponse{Key: key, Error: fmt.Sprintf("config key %q is not present in config.json", key)}
 		}
-		return &ConfigResponse{Key: key, Value: cfg.SimpleRepositories}
-	case "acronyms":
-		if cfg.Acronyms == nil {
-			return &ConfigResponse{Key: key, Error: fmt.Sprintf("config key %q is not present in config.json", key)}
-		}
-		return &ConfigResponse{Key: key, Value: cfg.Acronyms}
-	case "skillsCopyDir":
-		if cfg.SkillsCopyDir == "" {
-			return &ConfigResponse{Key: key, Error: fmt.Sprintf("config key %q is not present in config.json", key)}
-		}
-		return &ConfigResponse{Key: key, Value: cfg.SkillsCopyDir}
-	default:
-		return &ConfigResponse{Key: key, Error: fmt.Sprintf("unknown config key %q", key)}
+		return &ConfigResponse{Key: key, Value: fv.Interface()}
 	}
+	return &ConfigResponse{Key: key, Error: fmt.Sprintf("unknown config key %q", key)}
 }
 
 func Write(path string, v any) error {

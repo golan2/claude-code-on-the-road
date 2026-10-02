@@ -20,13 +20,18 @@ const (
 )
 
 // SimpleRepository is one entry of the simpleRepositories config list,
-// returned verbatim as the value of a "simple_repositories" config-request.
+// returned verbatim as the value of a "simpleRepositories" config-request.
 type SimpleRepository struct {
 	Nickname string `json:"nickname"`
 	Path     string `json:"path"`
 }
 
-// Config holds the application configuration loaded from a JSON file.
+// Config holds the application configuration loaded from a JSON file. Every
+// field is queryable via a config-request whose key matches the field's JSON
+// tag name (response.BuildConfig resolves this generically by reflection —
+// adding a field here is enough to make it queryable, no other code needed);
+// a request for a field left at its zero value fails with "not present" the
+// same way a request for an unrecognized key fails with "unknown config key".
 //
 //   - WatchFolder: absolute path to the Drive-synced root folder GoApp polls for session folders.
 //   - PollIntervalSeconds: how often, in seconds, GoApp scans for new requests.
@@ -34,7 +39,7 @@ type SimpleRepository struct {
 //   - PermissionMode: the default Claude Code permission mode used when a request doesn't specify one.
 //   - MaxConcurrentSessions: the maximum number of Claude Code invocations allowed to run at once.
 //   - ExecOutputMaxChars: the cap, in characters, on exec-response output before it is truncated.
-//   - SimpleRepositories: backs the "simple_repositories" config-request key; left nil (not defaulted
+//   - SimpleRepositories: backs the "simpleRepositories" config-request key; left nil (not defaulted
 //     to an empty slice) when absent from the config file, so "never configured" can be told apart
 //     from "configured but empty".
 //   - Acronyms: backs the "acronyms" config-request key; independent of SimpleRepositories, left nil
