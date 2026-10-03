@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -77,7 +78,10 @@ type Config struct {
 	SkillsCopyIntervalSeconds int                `json:"skillsCopyIntervalSeconds"`
 }
 
-// Load reads the JSON configuration at path, applies defaults, and validates it.
+// Load reads the JSON configuration at path, applies defaults, and validates
+// it. A key in the file with no matching Config field fails Load outright
+// (naming the offending key) rather than being silently ignored, since a
+// typo'd or stale key would otherwise have no effect with no indication why.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -85,7 +89,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file %q: %w", path, err)
 	}
 
