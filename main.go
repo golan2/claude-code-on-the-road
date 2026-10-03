@@ -115,7 +115,6 @@ func main() {
 	sem := make(chan struct{}, cfg.MaxConcurrentSessions)
 
 	printRecentSessions(cfg.WatchFolder)
-	recoverStuckSessions(cfg, inFlight, sem)
 
 	runSkillsCopy(cfg)
 	go func() {
@@ -357,52 +356,6 @@ func printRecentSessions(watchFolder string) {
 	}
 }
 
-// recoverStuckSessions scans every session folder under cfg.WatchFolder for a
-// request left unanswered by a previous run (GoApp killed or crashed
-// mid-processing) and reprocesses it through the normal request-processing
-// path, exactly as if the poller had just discovered it. It dispatches
-// through the same inFlight/sem machinery pollOnce uses, so the first regular
-// poll tick correctly skips any folder already being recovered here.
-func recoverStuckSessions(cfg *config.Config, inFlight *inFlightSessions, sem chan struct{}) {
-	folders, err := session.DiscoverSessionFolders(cfg.WatchFolder)
-	if err != nil {
-		log.Printf("ERROR: %v", err)
-		return
-	}
-
-	for _, folder := range folders {
-		sessionName := filepath.Base(folder)
-
-		stuck, err := session.FindStuckRequest(folder)
-		if err != nil {
-			log.Printf("ERROR: %v", err)
-			continue
-		}
-		if stuck.Anomaly {
-			log.Printf("WARNING: [%s] unanswered request ordinals %v violate the sequential processing guarantee (expected at most the highest ordinal to be unanswered) — skipping automatic recovery for this session, investigate manually\n", sessionName, stuck.Unanswered)
-			continue
-		}
-		if !stuck.Found {
-			continue
-		}
-
-		log.Printf("[%s][request_%s] - stuck from a previous run, reprocessing\n", sessionName, stuck.Ordinal)
-
-		if !inFlight.tryMark(folder) {
-			continue
-		}
-		go func(folder, ordinal, requestFilePath string) {
-			defer recoverPanic(fmt.Sprintf("processRequest[%s][request_%s]", filepath.Base(folder), ordinal))
-			sem <- struct{}{}
-			defer func() {
-				<-sem
-				inFlight.unmark(folder)
-			}()
-			processRequest(cfg, folder, ordinal, requestFilePath)
-		}(folder, stuck.Ordinal, stuck.RequestFilePath)
-	}
-}
-
 func pollOnce(cfg *config.Config, inFlight *inFlightSessions, inFlightExecs, inFlightConfigs *inFlightKeyed, sem chan struct{}) {
 	folders, err := session.DiscoverSessionFolders(cfg.WatchFolder)
 	if err != nil {
@@ -499,6 +452,9 @@ func recoverPanic(label string) {
 
 func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string) {
 	sessionName := filepath.Base(folder)
+	if _, err := os.Stat(session.AckPathFor(folder, ordinal)); err == nil {
+		log.Printf("[%s][request_%s] - already acked but unanswered (started by a previous run), reprocessing\n", sessionName, ordinal)
+	}
 	log.Printf("[%s][request_%s] - sent to Claude Code\n", sessionName, ordinal)
 
 	payload, err := loadRequest(requestFilePath)
