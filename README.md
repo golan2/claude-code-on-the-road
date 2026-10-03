@@ -5,9 +5,9 @@ A Go console app that bridges voice-command sessions from a phone to Claude Code
 ## How it works
 
 - A Google Drive folder (synced locally on the Mac) holds one subfolder per session, nested under a subfolder per repository/working directory.
-- PhoneClaude (PC) writes numbered request files (`00001_request.json`, `00002_request.json`, ...) into a session folder.
+- PhoneClaude (PC) writes numbered request files (`00001_cc_request.json`, `00002_cc_request.json`, ...) into a session folder.
 - This app (GoApp) polls that folder tree, picks up new request files, and invokes the `claude` CLI (`claude -p`) with the prompt, resuming the session by UUID when one already exists for that folder.
-- GoApp writes the result back as a matching numbered response file (`00001_response.json`, ...) in the same folder, wrapped in its own envelope alongside Claude Code's raw JSON output.
+- GoApp writes the result back as a matching numbered response file (`00001_cc_response.json`, ...) in the same folder, wrapped in its own envelope alongside Claude Code's raw JSON output.
 - PC reads the response file to continue the conversation.
 
 The full protocol — file schemas, session lifecycle, and every request type below — is specified in [instructions.md](instructions.md), which is also PC's own reference document (synced verbatim into the Drive root so PC can read it directly).
@@ -18,7 +18,9 @@ The relay isn't limited to plain "send a prompt, get a Claude Code reply" turns.
 
 ### Claude Code requests
 
-The core flow: `NNNNN_request.json` carries a `prompt` (and `workdir` on the first request of a session) and GoApp runs it through `claude -p`, resuming the existing session UUID for that folder when there is one. GoApp acknowledges pickup with `NNNNN_ack.json` as soon as the subprocess launches, then writes the final `NNNNN_response.json` with the outcome (`success`, `claude_code_error`, or `timeout`) and Claude Code's raw result.
+The core flow: `NNNNN_cc_request.json` carries a `prompt` (and `workdir` on the first request of a session) and GoApp runs it through `claude -p`, resuming the existing session UUID for that folder when there is one. GoApp acknowledges pickup with `NNNNN_ack.json` as soon as the subprocess launches, then writes the final `NNNNN_cc_response.json` with the outcome (`success`, `claude_code_error`, or `timeout`) and Claude Code's raw result.
+
+Plain `NNNNN_request.json` is still accepted by GoApp for backward compatibility only; new requests use `NNNNN_cc_request.json`. The same applies to responses: GoApp writes `NNNNN_cc_response.json`, and a request already answered under the legacy `NNNNN_response.json` name is never reprocessed. A legacy-named request gets a legacy-named response back, for backward compatibility only.
 
 ### Status requests
 
@@ -40,7 +42,7 @@ A session can be **no-CC**: bootstrapped entirely by exec-requests, never invoki
 
 ### Session lifecycle
 
-- **New sessions** start with `00001_request.json` including `workdir` (or `00001_exec_request.json` including `workdir`, for a no-CC session); the working directory is then immutable for that session's lifetime — a new repository always means a new session folder.
+- **New sessions** start with `00001_cc_request.json` including `workdir` (or `00001_exec_request.json` including `workdir`, for a no-CC session); the working directory is then immutable for that session's lifetime — a new repository always means a new session folder.
 - **Acks** (`NNNNN_ack.json`) confirm GoApp successfully launched the Claude Code subprocess for a given request, well before the final response is ready. A missing ack after a reasonable delay signals something failed before Claude Code even launched.
 - **Archiving** moves a finished session folder into the root's `_archived` folder (a plain Drive move), after which GoApp stops scanning it entirely.
 
@@ -48,7 +50,7 @@ A session can be **no-CC**: bootstrapped entirely by exec-requests, never invoki
 
 Every session folder that has ever run a regular request or a no-CC-bootstrapping exec-request gets a `__session_conf.json`, written and owned entirely by GoApp — PC never reads or writes it (`instructions.md` explicitly tells PC to never touch it). It holds the session's fixed `workdir`, its `permissionMode`, and the Claude Code `sessionId` to resume (empty for a no-CC session that hasn't invoked Claude Code yet). GoApp only ever recognizes a folder as needing this file — and derives `workdir` from a request's payload — on the first request of that kind ever written into the folder; every session, including a no-CC one, has exactly one bootstrapping moment, not one per request type.
 
-A session folder with no `__session_conf.json` yet is a folder that has never received a first request (regular or exec) with `workdir`. Sending an exec-request into such a folder without `workdir` fails with `"no session configuration found"` — the folder is discoverable (GoApp scans for `_request.json`, `_exec_request.json`, and `_config_request.json` files alike), but there's nothing to run the command against yet.
+A session folder with no `__session_conf.json` yet is a folder that has never received a first request (regular or exec) with `workdir`. Sending an exec-request into such a folder without `workdir` fails with `"no session configuration found"` — the folder is discoverable (GoApp scans for `_cc_request.json`, `_exec_request.json`, and `_config_request.json` files alike), but there's nothing to run the command against yet.
 
 ## Skills support
 
@@ -60,7 +62,7 @@ Change detection is mtime-based: GoApp keeps a baseline in `skills_state.json` i
 
 ### Per-session `skills` hint
 
-`__session_conf.json` (see above) has an optional `skills` field — a list of skill names, sticky for that session the same way `permissionMode` is. It's set via an optional `skills` array on any `NNNNN_request.json`; once set, it stays in effect for later requests in that session until a request sets a different non-empty list.
+`__session_conf.json` (see above) has an optional `skills` field — a list of skill names, sticky for that session the same way `permissionMode` is. It's set via an optional `skills` array on any `NNNNN_cc_request.json`; once set, it stays in effect for later requests in that session until a request sets a different non-empty list.
 
 This does **not** restrict which skills are visible to that session — every session's Claude Code invocation still gets the full `skillsCopyDir` via `--add-dir`, exactly as when `skills` is unset or empty. Instead, when the resolved list for a request is non-empty, GoApp appends a plain-text instruction naming those skills to that request's prompt (e.g. `For this task, use the following skill(s): x, y.`) before sending it to `claude -p`. It's a nudge for Claude Code's own model-invocation judgment on this one task, not an access-control mechanism.
 
