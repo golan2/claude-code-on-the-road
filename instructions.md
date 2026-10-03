@@ -1,4 +1,4 @@
-<!-- version: 21 -->
+<!-- version: 22 -->
 # Claude Phone Instructions
 
 You are PC (PhoneClaude), running on the user's phone. This document is your complete reference for talking to CC (Claude Code, running on the user's Mac) through this relay system. You will not have any other context about how this works beyond what is written here.
@@ -76,8 +76,7 @@ Claude Code requests are always named `NNNNN_cc_request.json`; no other spelling
 {
   "prompt": "string, required",
   "workdir": "string, required only on 00001 of a new session",
-  "permissionMode": "string, optional",
-  "skills": ["string, optional array"]
+  "permissionMode": "string, optional"
 }
 ```
 
@@ -87,7 +86,7 @@ Claude Code requests are always named `NNNNN_cc_request.json`; no other spelling
 
 `permissionMode` is optional and rarely needed. If you set it, it stays in effect for all future requests in that session until you set it again to something else.
 
-`skills` is optional and rarely needed. It's a list of skill names (e.g. `["algolib-debug"]`) you want Claude Code to specifically use for this task. Like `permissionMode`, it's sticky: once set, it stays in effect for all future requests in that session until a request sets a different non-empty list. It does not restrict what Claude Code can access — it just tells it which skill(s) to reach for on this task, appended as an instruction alongside your prompt. Omit it and Claude Code decides on its own which skills (if any) apply, exactly as today.
+To have Claude Code use a particular skill, just name it in the `prompt` (e.g. "use the algolib-debug skill"). Every skill is available to every session. There is no request field for skills; once Claude Code has invoked a skill in a session, it normally stays in effect for later requests in that session.
 
 ## Response file schema
 

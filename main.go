@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,10 +28,9 @@ import (
 )
 
 type requestPayload struct {
-	Prompt         string   `json:"prompt"`
-	Workdir        string   `json:"workdir,omitempty"`
-	PermissionMode string   `json:"permissionMode,omitempty"`
-	Skills         []string `json:"skills,omitempty"`
+	Prompt         string `json:"prompt"`
+	Workdir        string `json:"workdir,omitempty"`
+	PermissionMode string `json:"permissionMode,omitempty"`
 }
 
 // inFlightSessions keeps track of all Claude Code invocations that are in progress and awaiting a response.
@@ -471,7 +469,6 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 
 	isNewSession := conf == nil
 	var workdir, permissionMode, resumeSessionID string
-	var skills []string
 	if isNewSession {
 		if payload.Workdir == "" {
 			writeRequestError(requestFilePath, ordinal, sessionName, "workdir is required on the first request of a new session")
@@ -482,7 +479,6 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		if permissionMode == "" {
 			permissionMode = cfg.PermissionMode
 		}
-		skills = payload.Skills
 	} else {
 		workdir = conf.Workdir
 		permissionMode = conf.PermissionMode
@@ -498,15 +494,6 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 			permissionMode = cfg.PermissionMode
 		}
 		resumeSessionID = conf.SessionID
-		skills = conf.Skills
-		if len(payload.Skills) > 0 {
-			skills = payload.Skills
-		}
-	}
-
-	prompt := payload.Prompt
-	if len(skills) > 0 {
-		prompt += fmt.Sprintf("\n\nFor this task, use the following skill(s): %s.", strings.Join(skills, ", "))
 	}
 
 	tracker := claudecode.NewProgressTracker()
@@ -518,7 +505,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	}()
 
 	invokeResult, err := claudecode.Invoke(claudecode.InvokeParams{
-		Prompt:          prompt,
+		Prompt:          payload.Prompt,
 		Workdir:         workdir,
 		PermissionMode:  permissionMode,
 		AddDirs:         []string{folder, cfg.SkillsCopyDir},
@@ -537,8 +524,10 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	finished.Store(true)
 	close(statusDone)
 
-	if err == nil && len(skills) > 0 {
-		logMissingSkillInvocations(sessionName, ordinal, skills, tracker.InvokedSkills())
+	if err == nil {
+		if invoked := tracker.InvokedSkills(); len(invoked) > 0 {
+			log.Printf("[%s][request_%s] - skills invoked: %s\n", sessionName, ordinal, strings.Join(invoked, ", "))
+		}
 	}
 
 	var resp *response.Response
@@ -567,9 +556,8 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 			SessionID:      resp.SessionID,
 			Workdir:        workdir,
 			PermissionMode: permissionMode,
-			Skills:         skills,
 		})
-	case !isNewSession && (permissionMode != conf.PermissionMode || !slices.Equal(skills, conf.Skills) || gainedSessionID):
+	case !isNewSession && (permissionMode != conf.PermissionMode || gainedSessionID):
 		sessionID := conf.SessionID
 		if gainedSessionID {
 			sessionID = resp.SessionID
@@ -578,7 +566,6 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 			SessionID:      sessionID,
 			Workdir:        conf.Workdir,
 			PermissionMode: permissionMode,
-			Skills:         skills,
 		})
 	default:
 		err = nil
@@ -631,25 +618,6 @@ func runStatusRequestWatcher(
 			}
 		case <-done:
 			return
-		}
-	}
-}
-
-// logMissingSkillInvocations warns, per session/ordinal, about any name in
-// requestedSkills that never showed up as a Skill tool_use event's "skill"
-// input during the invocation (invokedSkills, from tracker.InvokedSkills()).
-// The requested-skills instruction appended to the prompt (see processRequest)
-// is a request to the model, not a guarantee — this is how GoApp notices, and
-// surfaces via its own log rather than silently, on the rare occasion Claude
-// Code doesn't actually invoke a skill it was asked to use.
-func logMissingSkillInvocations(sessionName, ordinal string, requestedSkills, invokedSkills []string) {
-	invoked := make(map[string]bool, len(invokedSkills))
-	for _, name := range invokedSkills {
-		invoked[name] = true
-	}
-	for _, name := range requestedSkills {
-		if !invoked[name] {
-			log.Printf("WARNING: [%s][request_%s] requested skill %q was not observed to be invoked in this response\n", sessionName, ordinal, name)
 		}
 	}
 }
