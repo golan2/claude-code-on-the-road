@@ -31,6 +31,7 @@ type requestPayload struct {
 	Prompt         string `json:"prompt"`
 	Workdir        string `json:"workdir,omitempty"`
 	PermissionMode string `json:"permissionMode,omitempty"`
+	Summary        string `json:"summary,omitempty"`
 }
 
 // inFlightSessions keeps track of all Claude Code invocations that are in progress and awaiting a response.
@@ -448,22 +449,34 @@ func recoverPanic(label string) {
 	}
 }
 
+// summarySuffix formats the optional "summary" field PC may set on any
+// request as a trailing clause for the existing pickup/response log line —
+// so every request produces exactly one log line, never a second one just
+// for the summary. A missing summary doesn't fail the request; it's folded
+// into that same line as an inline warning instead of a separate line.
+func summarySuffix(summary string) string {
+	if summary == "" {
+		return " - WARNING: no summary provided"
+	}
+	return fmt.Sprintf(" - summary: %q", summary)
+}
+
 func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string) {
 	sessionName := filepath.Base(folder)
 	if _, err := os.Stat(session.AckPathFor(folder, ordinal)); err == nil {
 		log.Printf("[%s][request_%s] - already acked but unanswered (started by a previous run), reprocessing\n", sessionName, ordinal)
 	}
-	log.Printf("[%s][request_%s] - sent to Claude Code\n", sessionName, ordinal)
 
 	payload, err := loadRequest(requestFilePath)
 	if err != nil {
-		writeRequestError(requestFilePath, ordinal, sessionName, err.Error())
+		writeRequestError(requestFilePath, ordinal, sessionName, "", err.Error())
 		return
 	}
+	log.Printf("[%s][request_%s] - sent to Claude Code%s\n", sessionName, ordinal, summarySuffix(payload.Summary))
 
 	conf, err := session.LoadSessionConf(folder)
 	if err != nil {
-		writeRequestError(requestFilePath, ordinal, sessionName, fmt.Sprintf("invalid __session_conf.json: %v", err))
+		writeRequestError(requestFilePath, ordinal, sessionName, payload.Summary, fmt.Sprintf("invalid __session_conf.json: %v", err))
 		return
 	}
 
@@ -471,7 +484,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	var workdir, permissionMode, resumeSessionID string
 	if isNewSession {
 		if payload.Workdir == "" {
-			writeRequestError(requestFilePath, ordinal, sessionName, "workdir is required on the first request of a new session")
+			writeRequestError(requestFilePath, ordinal, sessionName, payload.Summary, "workdir is required on the first request of a new session")
 			return
 		}
 		workdir = payload.Workdir
@@ -575,7 +588,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		log.Printf("ERROR: %v", err)
 	}
 
-	printCompletion(resp.Outcome, ordinal, sessionName)
+	printCompletion(resp.Outcome, ordinal, sessionName, payload.Summary)
 }
 
 // statusRequestPollIntervalSeconds controls how often the session folder is
@@ -650,7 +663,7 @@ func loadRequest(path string) (*requestPayload, error) {
 	return &payload, nil
 }
 
-func writeRequestError(requestFilePath, ordinal, sessionName, message string) {
+func writeRequestError(requestFilePath, ordinal, sessionName, summary, message string) {
 	resp := &response.Response{
 		Outcome: response.OutcomeClaudeCodeError,
 		Error:   &response.ErrorDetail{Message: message},
@@ -658,23 +671,25 @@ func writeRequestError(requestFilePath, ordinal, sessionName, message string) {
 	if err := response.Write(session.ResponsePathFor(requestFilePath), resp); err != nil {
 		log.Printf("ERROR: %v", err)
 	}
-	log.Printf("ERROR: [%s][%s_cc_response] - written to folder\n", sessionName, ordinal)
+	log.Printf("ERROR: [%s][%s_cc_response] - written to folder%s\n", sessionName, ordinal, summarySuffix(summary))
 }
 
-func printCompletion(outcome, ordinal, sessionName string) {
+func printCompletion(outcome, ordinal, sessionName, summary string) {
+	suffix := summarySuffix(summary)
 	switch outcome {
 	case response.OutcomeSuccess:
-		log.Printf("[%s][%s_cc_response] - written to folder\n", sessionName, ordinal)
+		log.Printf("[%s][%s_cc_response] - written to folder%s\n", sessionName, ordinal, suffix)
 	case response.OutcomeClaudeCodeError:
-		log.Printf("ERROR: [%s][%s_cc_response] - written to folder\n", sessionName, ordinal)
+		log.Printf("ERROR: [%s][%s_cc_response] - written to folder%s\n", sessionName, ordinal, suffix)
 	case response.OutcomeTimeout:
-		log.Printf("TIMEOUT: [%s][%s_cc_response] - written to folder\n", sessionName, ordinal)
+		log.Printf("TIMEOUT: [%s][%s_cc_response] - written to folder%s\n", sessionName, ordinal, suffix)
 	}
 }
 
 type execRequestPayload struct {
 	Command string `json:"command"`
 	Workdir string `json:"workdir,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 func loadExecRequest(path string) (*execRequestPayload, error) {
@@ -695,17 +710,17 @@ func loadExecRequest(path string) (*execRequestPayload, error) {
 
 func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath string) {
 	sessionName := filepath.Base(folder)
-	log.Printf("[%s][exec_%s] - running shell command\n", sessionName, ordinal)
 
 	payload, err := loadExecRequest(execRequestFilePath)
 	if err != nil {
-		writeExecError(execRequestFilePath, ordinal, sessionName, err.Error())
+		writeExecError(execRequestFilePath, ordinal, sessionName, "", err.Error())
 		return
 	}
+	log.Printf("[%s][exec_%s] - running shell command%s\n", sessionName, ordinal, summarySuffix(payload.Summary))
 
 	conf, err := session.LoadSessionConf(folder)
 	if err != nil {
-		writeExecError(execRequestFilePath, ordinal, sessionName, fmt.Sprintf("invalid __session_conf.json: %v", err))
+		writeExecError(execRequestFilePath, ordinal, sessionName, payload.Summary, fmt.Sprintf("invalid __session_conf.json: %v", err))
 		return
 	}
 	if conf == nil {
@@ -716,12 +731,12 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 		// session, and __session_conf.json is created with no SessionID
 		// (there is no Claude Code session yet, and there may never be one).
 		if payload.Workdir == "" {
-			writeExecError(execRequestFilePath, ordinal, sessionName, "workdir is required on the first request of a new session (no session configuration found yet)")
+			writeExecError(execRequestFilePath, ordinal, sessionName, payload.Summary, "workdir is required on the first request of a new session (no session configuration found yet)")
 			return
 		}
 		conf = &session.SessionConf{Workdir: payload.Workdir}
 		if err := session.SaveSessionConf(folder, conf); err != nil {
-			writeExecError(execRequestFilePath, ordinal, sessionName, fmt.Sprintf("failed to save __session_conf.json: %v", err))
+			writeExecError(execRequestFilePath, ordinal, sessionName, payload.Summary, fmt.Sprintf("failed to save __session_conf.json: %v", err))
 			return
 		}
 		log.Printf("[%s][exec_%s] - initialized new no-CC session with workdir %s\n", sessionName, ordinal, conf.Workdir)
@@ -757,14 +772,15 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 		log.Printf("ERROR: %v", err)
 	}
 
+	suffix := summarySuffix(payload.Summary)
 	if resp.Error != "" {
-		log.Printf("ERROR: [%s][exec_response_%s] - %s\n", sessionName, ordinal, resp.Error)
+		log.Printf("ERROR: [%s][exec_response_%s] - %s%s\n", sessionName, ordinal, resp.Error, suffix)
 	} else {
-		log.Printf("[%s][exec_response_%s] - written to folder (exit %d)\n", sessionName, ordinal, resp.ExitCode)
+		log.Printf("[%s][exec_response_%s] - written to folder (exit %d)%s\n", sessionName, ordinal, resp.ExitCode, suffix)
 	}
 }
 
-func writeExecError(execRequestFilePath, ordinal, sessionName, message string) {
+func writeExecError(execRequestFilePath, ordinal, sessionName, summary, message string) {
 	resp := &response.ExecResponse{
 		ExitCode:  -1,
 		Error:     message,
@@ -773,11 +789,12 @@ func writeExecError(execRequestFilePath, ordinal, sessionName, message string) {
 	if err := response.Write(session.ExecResponsePathFor(execRequestFilePath), resp); err != nil {
 		log.Printf("ERROR: %v", err)
 	}
-	log.Printf("ERROR: [%s][exec_response_%s] - %s\n", sessionName, ordinal, message)
+	log.Printf("ERROR: [%s][exec_response_%s] - %s%s\n", sessionName, ordinal, message, summarySuffix(summary))
 }
 
 type configRequestPayload struct {
-	Key string `json:"key"`
+	Key     string `json:"key"`
+	Summary string `json:"summary,omitempty"`
 }
 
 func loadConfigRequest(path string) (*configRequestPayload, error) {
@@ -801,30 +818,31 @@ func loadConfigRequest(path string) (*configRequestPayload, error) {
 // NNNNN_config_response.json written from the in-memory cfg.
 func processConfigRequest(cfg *config.Config, folder, ordinal, configRequestFilePath string) {
 	sessionName := filepath.Base(folder)
-	log.Printf("[%s][config_%s] - resolving config key\n", sessionName, ordinal)
 
 	payload, err := loadConfigRequest(configRequestFilePath)
 	if err != nil {
-		writeConfigError(configRequestFilePath, ordinal, sessionName, err.Error())
+		writeConfigError(configRequestFilePath, ordinal, sessionName, "", err.Error())
 		return
 	}
+	log.Printf("[%s][config_%s] - resolving config key%s\n", sessionName, ordinal, summarySuffix(payload.Summary))
 
 	resp := response.BuildConfig(cfg, payload.Key)
 	if err := response.Write(session.ConfigResponsePathFor(configRequestFilePath), resp); err != nil {
 		log.Printf("ERROR: %v", err)
 	}
 
+	suffix := summarySuffix(payload.Summary)
 	if resp.Error != "" {
-		log.Printf("ERROR: [%s][config_response_%s] - %s\n", sessionName, ordinal, resp.Error)
+		log.Printf("ERROR: [%s][config_response_%s] - %s%s\n", sessionName, ordinal, resp.Error, suffix)
 	} else {
-		log.Printf("[%s][config_response_%s] - written to folder\n", sessionName, ordinal)
+		log.Printf("[%s][config_response_%s] - written to folder%s\n", sessionName, ordinal, suffix)
 	}
 }
 
-func writeConfigError(configRequestFilePath, ordinal, sessionName, message string) {
+func writeConfigError(configRequestFilePath, ordinal, sessionName, summary, message string) {
 	resp := &response.ConfigResponse{Error: message}
 	if err := response.Write(session.ConfigResponsePathFor(configRequestFilePath), resp); err != nil {
 		log.Printf("ERROR: %v", err)
 	}
-	log.Printf("ERROR: [%s][config_response_%s] - %s\n", sessionName, ordinal, message)
+	log.Printf("ERROR: [%s][config_response_%s] - %s%s\n", sessionName, ordinal, message, summarySuffix(summary))
 }

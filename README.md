@@ -20,6 +20,8 @@ The relay isn't limited to plain "send a prompt, get a Claude Code reply" turns.
 
 The core flow: `NNNNN_cc_request.json` carries a `prompt` (and `workdir` on the first request of a session) and GoApp runs it through `claude -p`, resuming the existing session UUID for that folder when there is one. GoApp acknowledges pickup with `NNNNN_ack.json` as soon as the subprocess launches, then writes the final `NNNNN_cc_response.json` with the outcome (`success`, `claude_code_error`, or `timeout`) and Claude Code's raw result.
 
+Every request file of any type may also carry an optional `summary` field — a short human-readable description PC chooses, logged by GoApp alongside the session name and ordinal when the request is picked up and again when the response is written, so log lines can be correlated with what PC actually asked for. PC's instructions tell it to always include one, but GoApp never fails a request over a missing `summary` — it just logs a warning and carries on. Unknown/extra fields on any request file are likewise ignored rather than rejected.
+
 Plain `NNNNN_request.json` is still accepted by GoApp for backward compatibility only; new requests use `NNNNN_cc_request.json`. The same applies to responses: GoApp writes `NNNNN_cc_response.json`, and a request already answered under the legacy `NNNNN_response.json` name is never reprocessed. A legacy-named request gets a legacy-named response back, for backward compatibility only.
 
 ### Status requests
