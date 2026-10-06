@@ -657,17 +657,17 @@ func writeRequestError(requestFilePath, ordinal, sessionName, message string) {
 	if err := response.Write(session.ResponsePathFor(requestFilePath), resp); err != nil {
 		log.Printf("ERROR: %v", err)
 	}
-	log.Printf("ERROR: [%s][response_%s] - written to folder\n", sessionName, ordinal)
+	log.Printf("ERROR: [%s][%s_cc_response] - written to folder\n", sessionName, ordinal)
 }
 
 func printCompletion(outcome, ordinal, sessionName string) {
 	switch outcome {
 	case response.OutcomeSuccess:
-		log.Printf("[%s][response_%s] - written to folder\n", sessionName, ordinal)
+		log.Printf("[%s][%s_cc_response] - written to folder\n", sessionName, ordinal)
 	case response.OutcomeClaudeCodeError:
-		log.Printf("ERROR: [%s][response_%s] - written to folder\n", sessionName, ordinal)
+		log.Printf("ERROR: [%s][%s_cc_response] - written to folder\n", sessionName, ordinal)
 	case response.OutcomeTimeout:
-		log.Printf("TIMEOUT: [%s][response_%s] - written to folder\n", sessionName, ordinal)
+		log.Printf("TIMEOUT: [%s][%s_cc_response] - written to folder\n", sessionName, ordinal)
 	}
 }
 
