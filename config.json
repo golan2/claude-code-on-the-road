@@ -10,6 +10,7 @@
     "/Users/izikgolan/git/platform/imu-claude"
   ],
   "skillsCopyDir": "/tmp/ccotr-skills",
+  "claudePath": "/opt/homebrew/bin/claude",
   "simpleRepositories": [
     { "nickname": "algolib", "path": "/Users/izikgolan/git/platform/algolib" },
     { "nickname": "argocd-argo-workflows", "path": "/Users/izikgolan/git/platform/argocd-argo-workflows" },

@@ -14,6 +14,7 @@ import (
 
 // InvokeParams holds the parameters for invoking the claude CLI.
 type InvokeParams struct {
+	ClaudePath      string // absolute path of the claude binary to spawn
 	Prompt          string
 	Workdir         string           // subprocess working directory (cwd)
 	PermissionMode  string           // passed as --permission-mode
@@ -145,7 +146,7 @@ func Invoke(params InvokeParams) (*InvokeResult, error) {
 
 	args := buildArgs(params)
 
-	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd := exec.CommandContext(ctx, params.ClaudePath, args...)
 	cmd.Dir = params.Workdir
 
 	// Put the child in its own process group so we can kill the whole tree on

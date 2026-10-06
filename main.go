@@ -505,6 +505,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	}()
 
 	invokeResult, err := claudecode.Invoke(claudecode.InvokeParams{
+		ClaudePath:      cfg.ClaudePath,
 		Prompt:          payload.Prompt,
 		Workdir:         workdir,
 		PermissionMode:  permissionMode,

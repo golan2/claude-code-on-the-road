@@ -61,6 +61,9 @@ type SimpleRepository struct {
 //     the config file (missing or empty fails fast at startup). If the directory doesn't exist yet, Load
 //     creates it, since GoApp populates it itself and macOS wipes /tmp on reboot. Also backs the
 //     "skillsCopyDir" config-request key.
+//   - ClaudePath: absolute path to the claude CLI binary GoApp spawns for every Claude Code request.
+//     No code-level default and no PATH lookup: it must be set in the config file and point to an
+//     existing executable file, or Load fails fast at startup.
 //   - SkillsCopyIntervalSeconds: how often, in seconds, GoApp re-scans SkillPaths for changed or
 //     deleted skill files and re-copies/cleans up accordingly. Defaults to 300 (5 minutes).
 type Config struct {
@@ -77,6 +80,7 @@ type Config struct {
 	SkillPaths                []string           `json:"skillPaths"`
 	SkillsCopyDir             string             `json:"skillsCopyDir"`
 	SkillsCopyIntervalSeconds int                `json:"skillsCopyIntervalSeconds"`
+	ClaudePath                string             `json:"claudePath"`
 }
 
 // Load reads the JSON configuration at path, applies defaults, and validates
@@ -177,6 +181,17 @@ func validate(cfg *Config) error {
 	// non-directory in the way) is fatal.
 	if err := os.MkdirAll(cfg.SkillsCopyDir, 0o755); err != nil {
 		return fmt.Errorf("skillsCopyDir %q could not be created: %w", cfg.SkillsCopyDir, err)
+	}
+
+	if cfg.ClaudePath == "" {
+		return fmt.Errorf("claudePath is required")
+	}
+	claudeInfo, err := os.Stat(cfg.ClaudePath)
+	if err != nil {
+		return fmt.Errorf("claudePath %q does not exist: %w", cfg.ClaudePath, err)
+	}
+	if claudeInfo.IsDir() || claudeInfo.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("claudePath %q is not an executable file", cfg.ClaudePath)
 	}
 
 	return nil

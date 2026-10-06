@@ -64,6 +64,10 @@ Change detection is mtime-based: GoApp keeps a baseline in `skills_state.json` i
 
 There is no per-request or per-session skills setting. Every skill is available to every session through `skillsCopyDir`, and PC asks for one by naming it in the prompt. Claude Code invokes it, and because GoApp resumes the same Claude Code session for the folder, it normally stays in context for later requests (this is not guaranteed across conversation compaction). After each request GoApp logs which skills Claude Code actually invoked (`skills invoked: x, y`), taken from the `Skill` tool_use events in the stream, so you can see whether a skill was really used.
 
+## Claude binary and subprocess environment
+
+GoApp spawns the `claude` CLI from an explicit absolute path, the required `claudePath` key in `config.json` (currently `/opt/homebrew/bin/claude`). There is no PATH lookup and no code-level default; startup fails fast if the key is missing, or the file doesn't exist or isn't executable, so a GoApp launched from an IDE or launcher with a minimal `PATH` can't fail later, mid-request.
+
 ## Logging
 
 Every event GoApp prints to stdout — startup, request/response/exec/config activity, warnings, and errors — is also appended to a log file, so history survives after the terminal is gone and after restarts. The path defaults to `goapp.log` (relative to the working directory GoApp is run from) and is configurable via `logFile` in `config.json`. It's opened in append mode, so it accumulates across runs rather than being wiped on each restart; the startup line records the PID so you can tell one run's entries apart from another's.
