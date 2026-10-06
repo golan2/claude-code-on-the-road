@@ -58,7 +58,8 @@ type SimpleRepository struct {
 //   - SkillsCopyDir: the shared directory GoApp copies every discovered skill into, with
 //     disable-model-invocation stripped in each copy, hierarchy preserved per SkillPaths root. Passed
 //     to every Claude Code invocation as an extra --add-dir. No code-level default: it must be set in
-//     the config file and must already exist on disk, or Load fails fast at startup. Also backs the
+//     the config file (missing or empty fails fast at startup). If the directory doesn't exist yet, Load
+//     creates it, since GoApp populates it itself and macOS wipes /tmp on reboot. Also backs the
 //     "skillsCopyDir" config-request key.
 //   - SkillsCopyIntervalSeconds: how often, in seconds, GoApp re-scans SkillPaths for changed or
 //     deleted skill files and re-copies/cleans up accordingly. Defaults to 300 (5 minutes).
@@ -170,12 +171,12 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("skillsCopyDir is required")
 	}
 
-	skillsInfo, err := os.Stat(cfg.SkillsCopyDir)
-	if err != nil {
-		return fmt.Errorf("skillsCopyDir %q does not exist: %w", cfg.SkillsCopyDir, err)
-	}
-	if !skillsInfo.IsDir() {
-		return fmt.Errorf("skillsCopyDir %q is not a directory", cfg.SkillsCopyDir)
+	// GoApp populates skillsCopyDir itself, and the default location lives under
+	// /tmp, which macOS wipes on reboot, so a missing directory is created
+	// rather than treated as a startup failure. Only a failed creation (or a
+	// non-directory in the way) is fatal.
+	if err := os.MkdirAll(cfg.SkillsCopyDir, 0o755); err != nil {
+		return fmt.Errorf("skillsCopyDir %q could not be created: %w", cfg.SkillsCopyDir, err)
 	}
 
 	return nil
