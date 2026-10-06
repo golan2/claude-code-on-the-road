@@ -68,6 +68,8 @@ There is no per-request or per-session skills setting. Every skill is available 
 
 GoApp spawns the `claude` CLI from an explicit absolute path, the required `claudePath` key in `config.json` (currently `/opt/homebrew/bin/claude`). There is no PATH lookup and no code-level default; startup fails fast if the key is missing, or the file doesn't exist or isn't executable, so a GoApp launched from an IDE or launcher with a minimal `PATH` can't fail later, mid-request.
 
+The subprocess inherits GoApp's environment with one override: `USER` is forced to the real OS account name. On macOS Claude Code finds its login credential in the keychain under the account named by `$USER`, so a GoApp launched with a `USER` that differs from the real account (observed: `USER=izik` inherited from GoLand, keychain item `izikgolan`) made every request fail with `Not logged in · Please run /login`.
+
 ## Logging
 
 Every event GoApp prints to stdout — startup, request/response/exec/config activity, warnings, and errors — is also appended to a log file, so history survives after the terminal is gone and after restarts. The path defaults to `goapp.log` (relative to the working directory GoApp is run from) and is configurable via `logFile` in `config.json`. It's opened in append mode, so it accumulates across runs rather than being wiped on each restart; the startup line records the PID so you can tell one run's entries apart from another's.

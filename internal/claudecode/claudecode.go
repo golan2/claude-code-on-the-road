@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"os/user"
 	"sync"
 	"syscall"
 	"time"
@@ -148,6 +150,7 @@ func Invoke(params InvokeParams) (*InvokeResult, error) {
 
 	cmd := exec.CommandContext(ctx, params.ClaudePath, args...)
 	cmd.Dir = params.Workdir
+	cmd.Env = claudeEnv()
 
 	// Put the child in its own process group so we can kill the whole tree on
 	// timeout (claude may spawn subprocesses like bash tool calls).
@@ -240,6 +243,21 @@ func handleStreamLine(line string, progress *ProgressTracker) {
 			progress.appendText(block.Text)
 		}
 	}
+}
+
+// claudeEnv returns the subprocess environment: GoApp's own, with USER forced
+// to the real OS account name. On macOS Claude Code looks up its login
+// credential in the keychain under the account named by $USER, so a GoApp
+// launched from an environment where USER differs from the real account
+// (e.g. USER=izik inherited from an IDE while the keychain item belongs to
+// izikgolan) gets "Not logged in · Please run /login" from every spawned
+// claude. exec.Cmd uses the last value when a key is repeated.
+func claudeEnv() []string {
+	env := os.Environ()
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		env = append(env, "USER="+u.Username)
+	}
+	return env
 }
 
 // buildArgs constructs the CLI argument slice from the given params.
