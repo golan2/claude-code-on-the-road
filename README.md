@@ -78,6 +78,14 @@ Every event GoApp prints to stdout — startup, request/response/exec/config act
 
 A panic in any single request's handling is caught, logged with a full stack trace, and does not take down the rest of the process — earlier, an unrecovered panic in one goroutine would silently kill all of GoApp, leaving every other in-flight or future request unanswered with nothing but a lost stderr line to explain why.
 
+## Work tracking
+
+`TODO.md` in the repo root tracks CCOTR work status: open items, backlog, and completed items.
+
 ## Status
 
 Implemented — see [main.go](main.go) and the `internal/` packages (`config`, `session`, `claudecode`, `shellexec`, `response`, `applog`) for the current GoApp implementation.
+
+## Work tracking
+
+[TODO.md](TODO.md) in the repo root tracks CCOTR work status: open items, backlog, and completed items.
