@@ -31,7 +31,8 @@ var (
 	statusRequestFilePattern = regexp.MustCompile(`^(\d{5})_status_request_(\d{3})\.json$`)
 	execRequestFilePattern   = regexp.MustCompile(`^(\d{5})_exec_request\.json$`)
 	configRequestFilePattern = regexp.MustCompile(`^(\d{5})_config_request\.json$`)
-	activityFilePattern      = regexp.MustCompile(`^\d{5}_(request|cc_request|response|cc_response|ack|exec_request|exec_response|config_request|config_response|status_request_\d{3}|status_response_\d{3})\.json$`)
+	cancelRequestFilePattern = regexp.MustCompile(`^(\d{5})_cancel_request\.json$`)
+	activityFilePattern      = regexp.MustCompile(`^\d{5}_(request|cc_request|response|cc_response|pid|ack|exec_request|exec_response|config_request|config_response|cancel_request|cancel_response|status_request_\d{3}|status_response_\d{3})\.json$`)
 )
 
 // SessionConf holds the per-session metadata stored in __session_conf.json.
@@ -257,6 +258,50 @@ func hasResponse(requestFilePath string) bool {
 // session folder and ordinal.
 func AckPathFor(sessionFolderPath, ordinal string) string {
 	return filepath.Join(sessionFolderPath, ordinal+"_ack.json")
+}
+
+// PidPathFor returns the path for the NNNNN_pid.json file that records the
+// Claude Code process PID for the given session folder and ordinal.
+func PidPathFor(sessionFolderPath, ordinal string) string {
+	return filepath.Join(sessionFolderPath, ordinal+"_pid.json")
+}
+
+// CancelResponsePathFor returns the path for the NNNNN_cancel_response.json
+// file answering a cancel request for the given session folder and ordinal.
+func CancelResponsePathFor(sessionFolderPath, ordinal string) string {
+	return filepath.Join(sessionFolderPath, ordinal+"_cancel_response.json")
+}
+
+// CCResponsePathFor returns the path for the NNNNN_cc_response.json file
+// for the given session folder and ordinal.
+func CCResponsePathFor(sessionFolderPath, ordinal string) string {
+	return filepath.Join(sessionFolderPath, ordinal+"_cc_response.json")
+}
+
+// PendingCancelRequests returns the ordinals of all NNNNN_cancel_request.json
+// files in sessionFolderPath that don't yet have a matching
+// NNNNN_cancel_response.json, sorted ascending.
+func PendingCancelRequests(sessionFolderPath string) ([]string, error) {
+	entries, err := os.ReadDir(sessionFolderPath)
+	if err != nil {
+		return nil, fmt.Errorf("read session folder %s: %w", sessionFolderPath, err)
+	}
+
+	var pending []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		m := cancelRequestFilePattern.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+		if _, err := os.Stat(CancelResponsePathFor(sessionFolderPath, m[1])); errors.Is(err, fs.ErrNotExist) {
+			pending = append(pending, m[1])
+		}
+	}
+	sort.Strings(pending)
+	return pending, nil
 }
 
 // PendingExecRequest describes a single pending exec-request file.

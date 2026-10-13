@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/golan2/claude-code-on-the-road/internal/applog"
@@ -111,6 +112,7 @@ func main() {
 	inFlight := &inFlightSessions{processing: make(map[string]bool)}
 	inFlightExecs := &inFlightKeyed{processing: make(map[string]bool)}
 	inFlightConfigs := &inFlightKeyed{processing: make(map[string]bool)}
+	inFlightCancels := &inFlightKeyed{processing: make(map[string]bool)}
 	sem := make(chan struct{}, cfg.MaxConcurrentSessions)
 
 	printRecentSessions(cfg.WatchFolder)
@@ -129,7 +131,7 @@ func main() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		pollOnce(cfg, inFlight, inFlightExecs, inFlightConfigs, sem)
+		pollOnce(cfg, inFlight, inFlightExecs, inFlightConfigs, inFlightCancels, sem)
 	}
 }
 
@@ -355,13 +357,31 @@ func printRecentSessions(watchFolder string) {
 	}
 }
 
-func pollOnce(cfg *config.Config, inFlight *inFlightSessions, inFlightExecs, inFlightConfigs *inFlightKeyed, sem chan struct{}) {
+func pollOnce(cfg *config.Config, inFlight *inFlightSessions, inFlightExecs, inFlightConfigs, inFlightCancels *inFlightKeyed, sem chan struct{}) {
 	folders, err := session.DiscoverSessionFolders(cfg.WatchFolder)
 	if err != nil {
 		log.Printf("ERROR: %v", err)
 		return
 	}
 	for _, folder := range folders {
+		// Cancel requests are checked before the folder's in-flight gate, since
+		// the gate stays held for the whole Claude Code run they need to interrupt.
+		cancelOrdinals, err := session.PendingCancelRequests(folder)
+		if err != nil {
+			log.Printf("ERROR: %v", err)
+		}
+		for _, ordinal := range cancelOrdinals {
+			key := execConfigKey(folder, ordinal)
+			if !inFlightCancels.tryMark(key) {
+				continue
+			}
+			go func(folder, ordinal string) {
+				defer recoverPanic(fmt.Sprintf("processCancelRequest[%s][cancel_%s]", filepath.Base(folder), ordinal))
+				defer inFlightCancels.unmark(key)
+				processCancelRequest(folder, ordinal)
+			}(folder, ordinal)
+		}
+
 		if inFlight.tryMark(folder) {
 			ordinal, requestFilePath, found, err := session.NextPendingRequest(folder)
 			if err != nil {
@@ -480,8 +500,8 @@ func briefSuffix(brief string) string {
 
 func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string) {
 	sessionName := filepath.Base(folder)
-	if _, err := os.Stat(session.AckPathFor(folder, ordinal)); err == nil {
-		log.Printf("[%s][request_%s] - already acked but unanswered (started by a previous run), reprocessing\n", sessionName, ordinal)
+	if _, err := os.Stat(session.PidPathFor(folder, ordinal)); err == nil {
+		log.Printf("[%s][request_%s] - already started but unanswered (started by a previous run), reprocessing\n", sessionName, ordinal)
 	}
 
 	payload, err := loadRequest(requestFilePath)
@@ -543,11 +563,8 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		ResumeSessionID: resumeSessionID,
 		Timeout:         time.Duration(cfg.TimeoutMinutes) * time.Minute,
 		Progress:        tracker,
-		OnLaunched: func() {
-			// The subprocess launch succeeded — drop the empty ack marker so
-			// PhoneClaude knows the request was picked up, long before the
-			// final response exists. Content is irrelevant; existence-only.
-			if err := os.WriteFile(session.AckPathFor(folder, ordinal), []byte("{}"), 0o644); err != nil {
+		OnLaunched: func(pid int) {
+			if err := writePidFile(session.PidPathFor(folder, ordinal), pid); err != nil {
 				log.Printf("ERROR: %v", err)
 			}
 		},
@@ -606,6 +623,74 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	}
 
 	printCompletion(resp.Outcome, ordinal, sessionName, payload.Brief)
+}
+
+type pidFile struct {
+	PID int `json:"pid"`
+}
+
+func writePidFile(path string, pid int) error {
+	data, err := json.Marshal(pidFile{PID: pid})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+type cancelResponse struct {
+	Status  string `json:"status"`
+	PID     int    `json:"pid,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+func processCancelRequest(folder, ordinal string) {
+	sessionName := filepath.Base(folder)
+	resp := cancelClaudeCode(folder, ordinal)
+
+	data, err := json.MarshalIndent(resp, "", "  ")
+	if err == nil {
+		err = os.WriteFile(session.CancelResponsePathFor(folder, ordinal), data, 0o644)
+	}
+	if err != nil {
+		log.Printf("ERROR: %v", err)
+		return
+	}
+
+	if resp.Status == "success" {
+		log.Printf("[%s][cancel_%s] - killed Claude Code pid %d\n", sessionName, ordinal, resp.PID)
+	} else {
+		log.Printf("ERROR: [%s][cancel_%s] - %s\n", sessionName, ordinal, resp.Message)
+	}
+}
+
+// cancelClaudeCode kills the Claude Code process recorded in the request's
+// NNNNN_pid.json. It refuses once the request has a cc_response, since by then
+// the PID may already belong to an unrelated process.
+func cancelClaudeCode(folder, ordinal string) cancelResponse {
+	if _, err := os.Stat(session.CCResponsePathFor(folder, ordinal)); err == nil {
+		return cancelResponse{Status: "error", Message: "request already finished"}
+	}
+
+	data, err := os.ReadFile(session.PidPathFor(folder, ordinal))
+	if errors.Is(err, fs.ErrNotExist) {
+		return cancelResponse{Status: "error", Message: "PID file not found"}
+	}
+	if err != nil {
+		return cancelResponse{Status: "error", Message: fmt.Sprintf("read PID file: %v", err)}
+	}
+
+	var pf pidFile
+	if err := json.Unmarshal(data, &pf); err != nil || pf.PID <= 0 {
+		return cancelResponse{Status: "error", Message: "PID file is invalid"}
+	}
+
+	// Claude Code runs in its own process group (see claudecode.Invoke), and its
+	// tool subprocesses inherit stdout. Killing only the PID leaves them holding
+	// the pipe open, so the request would never get its cc_response.
+	if err := syscall.Kill(-pf.PID, syscall.SIGKILL); err != nil {
+		return cancelResponse{Status: "error", Message: fmt.Sprintf("kill -9 -%d failed: %v", pf.PID, err)}
+	}
+	return cancelResponse{Status: "success", PID: pf.PID}
 }
 
 // statusRequestPollIntervalSeconds controls how often the session folder is
