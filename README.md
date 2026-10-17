@@ -32,7 +32,7 @@ It has to be run from the repo root because `config.json` is read from the curre
 | `permissionMode` | `bypassPermissions` | The default Claude Code permission mode. A request's own `permissionMode` overrides it for that request and every later request in the session. |
 | `maxConcurrentSessions` | 10 | The most Claude Code invocations allowed to run at once. |
 
-The other keys (`claudePath`, `skillsCopyDir`, `skillPaths`, `skillsCopyIntervalSeconds`, `logFile`, `execAckDelaySeconds`) are described in the sections below.
+The other keys (`claudePath`, `skillsCopyDir`, `skillPaths`, `skillsCopyIntervalSeconds`, `logFile`) are described in the sections below.
 
 ### Concurrency and timeouts
 
@@ -62,13 +62,13 @@ For raw shell commands that don't need Claude Code's judgment, `NNNNN_exec_reque
 
 An exec-request is only ever run once, even though "pending" is derived purely from "no response file yet": GoApp keeps an in-memory set of `folder:ordinal` keys currently being processed (mirrored for config-requests too), so a command that outlives a single `pollIntervalSeconds` tick doesn't get re-dispatched as a second, concurrent execution by the next tick.
 
-Unlike a regular request, an exec-request's `NNNNN_ack.json` is **conditional**, not guaranteed: GoApp only writes it if the command is still running after `execAckDelaySeconds` (default 5) has elapsed since launch. A command that finishes within that window gets no ack at all — its exec-response arrives just as fast and is proof enough it was picked up. This keeps the common case (a quick command) down to one file instead of two, while a genuinely slow command still gets its "picked up" signal.
+An exec request gets a `NNNNN_pid.json` the moment its command launches, the same "picked up" signal a Claude Code request gets. There is no ack file.
 
 A session can be **no-CC**: bootstrapped entirely by exec-requests, never invoking Claude Code. The first exec-request written into a brand-new session folder includes `workdir`, the same way a first regular request would, and GoApp creates `__session_conf.json` from it directly — with no Claude Code session ID yet. Such a session can still receive a regular request later, at which point it behaves exactly like one that had Claude Code from the start.
 
 ### Cancel requests
 
-`NNNNN_cancel_request.json` stops a Claude Code request that is still running; the ordinal is the request to cancel. GoApp reads that request's `NNNNN_pid.json` and sends SIGKILL to the whole process group (Claude Code's tool subprocesses inherit its stdout, so killing only the main process would leave the request hanging with no response). It answers with `NNNNN_cancel_response.json` (`status` `success` with the `pid`, or `error` with a `message`). It refuses with `request already finished` once the request has an `NNNNN_cc_response.json`, because by then the PID may belong to an unrelated process, and with `PID file not found` if the request hasn't launched yet. Cancel requests are checked before the per-session lock, since that lock is held for the whole run they need to interrupt, and like exec and config requests they are tracked in memory so a slow cancel isn't dispatched twice.
+`NNNNN_cancel_request.json` stops a Claude Code request or an exec request that is still running; the ordinal is the request to cancel, and GoApp tells which kind it is from the files in the folder. An exec request is cancellable from the moment it launches, because its PID file is written immediately; a cancelled exec gets an exec-response with `exitCode` -1 and whatever output it had produced. GoApp reads that request's `NNNNN_pid.json` and sends SIGKILL to the whole process group (Claude Code's tool subprocesses inherit its stdout, so killing only the main process would leave the request hanging with no response). It answers with `NNNNN_cancel_response.json` (`status` `success` with the `pid`, or `error` with a `message`). It refuses with `request already finished` once the request has its response (`NNNNN_cc_response.json` or `NNNNN_exec_response.json`), because by then the PID may belong to an unrelated process, and with `PID file not found` if the request hasn't launched yet. Cancel requests are checked before the per-session lock, since that lock is held for the whole run they need to interrupt, and like exec and config requests they are tracked in memory so a slow cancel isn't dispatched twice.
 
 ### Config requests
 

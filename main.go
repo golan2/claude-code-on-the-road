@@ -657,17 +657,24 @@ func processCancelRequest(folder, ordinal string) {
 	}
 
 	if resp.Status == "success" {
-		log.Printf("[%s][cancel_%s] - killed Claude Code pid %d\n", sessionName, ordinal, resp.PID)
+		log.Printf("[%s][cancel_%s] - killed process group of pid %d\n", sessionName, ordinal, resp.PID)
 	} else {
 		log.Printf("ERROR: [%s][cancel_%s] - %s\n", sessionName, ordinal, resp.Message)
 	}
 }
 
-// cancelClaudeCode kills the Claude Code process recorded in the request's
-// NNNNN_pid.json. It refuses once the request has a cc_response, since by then
+// cancelClaudeCode kills the process recorded in the request's NNNNN_pid.json
+// (a Claude Code request's process, or an exec request's shell). It refuses once the request has a cc_response, since by then
 // the PID may already belong to an unrelated process.
 func cancelClaudeCode(folder, ordinal string) cancelResponse {
-	if _, err := os.Stat(session.CCResponsePathFor(folder, ordinal)); err == nil {
+	// Ordinals are unique across request types, so the ordinal identifies
+	// either a Claude Code request or an exec request.
+	responsePath := session.CCResponsePathFor(folder, ordinal)
+	execRequestPath := filepath.Join(folder, ordinal+"_exec_request.json")
+	if _, err := os.Stat(execRequestPath); err == nil {
+		responsePath = session.ExecResponsePathFor(execRequestPath)
+	}
+	if _, err := os.Stat(responsePath); err == nil {
 		return cancelResponse{Status: "error", Message: "request already finished"}
 	}
 
@@ -684,8 +691,8 @@ func cancelClaudeCode(folder, ordinal string) cancelResponse {
 		return cancelResponse{Status: "error", Message: "PID file is invalid"}
 	}
 
-	// Claude Code runs in its own process group (see claudecode.Invoke), and its
-	// tool subprocesses inherit stdout. Killing only the PID leaves them holding
+	// Claude Code and exec shells each run in their own process group (see
+	// claudecode.Invoke and shellexec.Invoke), and their subprocesses inherit stdout. Killing only the PID leaves them holding
 	// the pipe open, so the request would never get its cc_response.
 	if err := syscall.Kill(-pf.PID, syscall.SIGKILL); err != nil {
 		return cancelResponse{Status: "error", Message: fmt.Sprintf("kill -9 -%d failed: %v", pf.PID, err)}
@@ -845,15 +852,14 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 	}
 
 	result, err := shellexec.Invoke(shellexec.InvokeParams{
-		Command:  payload.Command,
-		Workdir:  conf.Workdir,
-		Timeout:  time.Duration(cfg.TimeoutMinutes) * time.Minute,
-		AckDelay: time.Duration(cfg.ExecAckDelaySeconds) * time.Second,
-		OnLaunched: func() {
-			// Only reached if the command is still running after AckDelay —
-			// a fast exec-request just gets its exec-response, with no ack
-			// at all, since the response is proof enough it was picked up.
-			if err := os.WriteFile(session.AckPathFor(folder, ordinal), []byte("{}"), 0o644); err != nil {
+		Command: payload.Command,
+		Workdir: conf.Workdir,
+		Timeout: time.Duration(cfg.TimeoutMinutes) * time.Minute,
+		OnLaunched: func(pid int) {
+			// The PID file is the "picked up" signal, exactly as for Claude Code
+			// requests, and it is what makes the command cancellable from the
+			// moment it starts.
+			if err := writePidFile(session.PidPathFor(folder, ordinal), pid); err != nil {
 				log.Printf("ERROR: %v", err)
 			}
 		},

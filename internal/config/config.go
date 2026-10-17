@@ -16,7 +16,6 @@ const (
 	defaultMaxConcurrentSessions     = 10
 	defaultExecOutputMaxChars        = 30000
 	defaultLogFile                   = "goapp.log"
-	defaultExecAckDelaySeconds       = 5
 	defaultSkillsCopyIntervalSeconds = 300
 )
 
@@ -48,10 +47,6 @@ type SimpleRepository struct {
 //   - LogFile: path (relative to the working directory GoApp is run from, same convention as the
 //     config file path itself) of the append-only log file GoApp writes every event to, in addition
 //     to stdout. Defaults to "goapp.log" when absent from the config file.
-//   - ExecAckDelaySeconds: how long, in seconds, an exec-request's command must still be running
-//     before GoApp writes its NNNNN_ack.json. A command that finishes within this window gets no
-//     ack at all — its NNNNN_exec_response.json is the only signal PC needs, since it arrives just
-//     as fast. Defaults to 5 when absent from the config file.
 //   - SkillPaths: a manually-curated list of root directories to copy skills from. Each entry may
 //     start with "~/" for the user's home directory. Left nil (not defaulted to any path) when absent
 //     from the config file — skill copying is simply skipped.
@@ -76,7 +71,6 @@ type Config struct {
 	SimpleRepositories        []SimpleRepository `json:"simpleRepositories"`
 	Acronyms                  map[string]string  `json:"acronyms"`
 	LogFile                   string             `json:"logFile"`
-	ExecAckDelaySeconds       int                `json:"execAckDelaySeconds"`
 	SkillPaths                []string           `json:"skillPaths"`
 	SkillsCopyDir             string             `json:"skillsCopyDir"`
 	SkillsCopyIntervalSeconds int                `json:"skillsCopyIntervalSeconds"`
@@ -127,9 +121,6 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.LogFile == "" {
 		cfg.LogFile = defaultLogFile
-	}
-	if cfg.ExecAckDelaySeconds == 0 {
-		cfg.ExecAckDelaySeconds = defaultExecAckDelaySeconds
 	}
 	cfg.SkillsCopyDir = expandHome(cfg.SkillsCopyDir)
 	if cfg.SkillsCopyIntervalSeconds == 0 {

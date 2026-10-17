@@ -4,6 +4,7 @@
 1. TeamPlan repo with jira-team-plan skill auto-fetch (blocked on name decision)
 2. Make `claudePath` a config.json value (GoApp tests login at startup)
 3. Document/extract skills-copy sync feature for team use
+4. every time the scanner runs it should update the [goapp_started.json] file with heartbeat field with current time (same format as startedAt).
 
 ## Done
 - Process cancellation: PID file and cancel request kill Claude Code process group
