@@ -89,6 +89,7 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 
 	seen := make(map[string]bool)
 	copied, skipped, failed := 0, 0, 0
+	var copiedNames []string
 
 	for _, root := range cfg.SkillPaths {
 		skillDirs, err := discoverSkillDirs(root)
@@ -102,7 +103,8 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 				logf("ERROR: skillscopy: %v", err)
 				continue
 			}
-			destSkillDir := filepath.Join(cfg.CopyDir, filepath.FromSlash(claudeSkillsSubdir), skillDestName(rootIdentifiers[root], relSkill))
+			destName := skillDestName(rootIdentifiers[root], relSkill)
+			destSkillDir := filepath.Join(cfg.CopyDir, filepath.FromSlash(claudeSkillsSubdir), destName)
 
 			err = filepath.WalkDir(skillDir, func(srcFile string, d fs.DirEntry, err error) error {
 				if err != nil || d.IsDir() {
@@ -135,6 +137,7 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 				}
 				st.Files[srcFile] = fileState{SourceModTimeUnixNano: modNano, DestPath: destFile}
 				copied++
+				copiedNames = append(copiedNames, filepath.ToSlash(filepath.Join(destName, relFile)))
 				return nil
 			})
 			if err != nil {
@@ -151,7 +154,7 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 	}
 
 	if copied > 0 || removed > 0 {
-		logf("skillscopy: copied %d, skipped %d (unchanged), removed %d, failed %d", copied, skipped, removed, failed)
+		logf("skillscopy: copied %d, skipped %d (unchanged), removed %d, failed %d {%s}", copied, skipped, removed, failed, strings.Join(copiedNames, ","))
 	}
 	return nil
 }
