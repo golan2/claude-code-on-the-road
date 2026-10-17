@@ -6,7 +6,7 @@ A Go console app that bridges voice-command sessions from a phone to Claude Code
 
 ## How it works
 
-- A Google Drive folder (synced locally on the Mac) holds one subfolder per session, nested under a subfolder per repository/working directory.
+- A Google Drive folder (synced locally on the Mac) holds one subfolder per session, directly under the watch folder. The scan is flat: only the watch folder's direct child folders are looked at (and `_archived` is skipped), never anything deeper.
 - PhoneClaude (PC) writes numbered request files (`00001_cc_request.json`, `00002_cc_request.json`, ...) into a session folder.
 - This app (GoApp) polls that folder tree, picks up new request files, and invokes the `claude` CLI (`claude -p`) with the prompt, resuming the session by UUID when one already exists for that folder.
 - GoApp writes the result back as a matching numbered response file (`00001_cc_response.json`, ...) in the same folder, wrapped in its own envelope alongside Claude Code's raw JSON output.

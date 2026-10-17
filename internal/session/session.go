@@ -72,42 +72,28 @@ func SaveSessionConf(sessionFolderPath string, conf *SessionConf) error {
 	return nil
 }
 
-// DiscoverSessionFolders recursively walks root and returns the absolute paths
-// of every directory that directly contains at least one NNNNN_cc_request.json
-// (or legacy NNNNN_request.json) file.
-// Unreadable directories are skipped silently.
+// DiscoverSessionFolders returns the absolute paths of the session folders in
+// root: its direct child directories that contain at least one request file
+// (see dirHasRequestFile). The scan is flat — nothing deeper than a direct
+// child is ever looked at — so a session folder must be created directly under
+// the watch folder. The top-level "_archived" folder holds archived sessions
+// and is never scanned. A child that can't be read is skipped silently.
 func DiscoverSessionFolders(root string) ([]string, error) {
-	var folders []string
-	cleanRoot := filepath.Clean(root)
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if d != nil && d.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !d.IsDir() {
-			return nil
-		}
-		// The "_archived" folder directly under the root holds sessions archived
-		// externally (moved via Drive, e.g. by PhoneClaude at the user's explicit
-		// request). Its contents must never be scanned or polled, so prune the
-		// whole subtree. Only the top-level one is special — a folder named
-		// "_archived" deeper in the tree is treated normally.
-		if d.Name() == archivedFolderName && filepath.Dir(path) == cleanRoot {
-			return fs.SkipDir
-		}
-		hasRequest, err := dirHasRequestFile(path)
-		if err != nil {
-			return nil
-		}
-		if hasRequest {
-			folders = append(folders, path)
-		}
-		return nil
-	})
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, fmt.Errorf("discover session folders under %s: %w", root, err)
+	}
+	var folders []string
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == archivedFolderName {
+			continue
+		}
+		path := filepath.Join(root, e.Name())
+		hasRequest, err := dirHasRequestFile(path)
+		if err != nil || !hasRequest {
+			continue
+		}
+		folders = append(folders, path)
 	}
 	return folders, nil
 }
