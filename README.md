@@ -46,7 +46,7 @@ The relay isn't limited to plain "send a prompt, get a Claude Code reply" turns.
 
 ### Claude Code requests
 
-The core flow: `NNNNN_cc_request.json` carries a `prompt` (and `workdir` on the first request of a session) and GoApp runs it through `claude -p`, resuming the existing session UUID for that folder when there is one. As soon as the subprocess launches, GoApp writes its PID to `NNNNN_pid.json`, then writes the final `NNNNN_cc_response.json` with the outcome (`success`, `claude_code_error`, or `timeout`) and Claude Code's raw result. A `NNNNN_cancel_request.json` for the same ordinal kills that process group and gets a `NNNNN_cancel_response.json` back.
+The core flow: `NNNNN_cc_request.json` carries a `prompt` (and an optional `workdir`) and GoApp runs it through `claude -p`, resuming the existing session UUID for that folder when there is one. As soon as the subprocess launches, GoApp writes its PID to `NNNNN_pid.json`, then writes the final `NNNNN_cc_response.json` with the outcome (`success`, `claude_code_error`, or `timeout`) and Claude Code's raw result. A `NNNNN_cancel_request.json` for the same ordinal kills that process group and gets a `NNNNN_cancel_response.json` back.
 
 Every request file of any type may also carry a `brief` field — a short human-readable phrase in PC's own words (e.g. "fix the login bug"), capped at 7 words; GoApp trims anything longer to its first 7 words rather than rejecting it. It is appended to the existing log line when the request is picked up and again when its response is written (`... - brief: "fix the login bug"`), so every request is still exactly one line each time and log lines can be correlated with what PC actually asked for. GoApp never fails a request over a missing `brief` — the log line just carries `- WARNING: no brief provided`. Unknown/extra fields on any request file are likewise ignored rather than rejected.
 
@@ -58,13 +58,13 @@ While a Claude Code request is still in flight, PC can ask for a progress snapsh
 
 ### Exec requests
 
-For raw shell commands that don't need Claude Code's judgment, `NNNNN_exec_request.json` carries a `command` string that GoApp runs directly through a shell, starting from the session's workdir. Unlike Claude Code requests, exec-requests aren't serialized behind the per-session lock — they run immediately, concurrently with an in-flight Claude Code request or other exec-requests. GoApp replies with `NNNNN_exec_response.json` (exit code, merged stdout+stderr, and a `truncated` flag).
+For raw shell commands that don't need Claude Code's judgment, `NNNNN_exec_request.json` carries a `command` string that GoApp runs directly through a shell, starting from the session's workdir (`/tmp` if it has none). Unlike Claude Code requests, exec-requests aren't serialized behind the per-session lock — they run immediately, concurrently with an in-flight Claude Code request or other exec-requests. GoApp replies with `NNNNN_exec_response.json` (exit code, merged stdout+stderr, and a `truncated` flag).
 
 An exec-request is only ever run once, even though "pending" is derived purely from "no response file yet": GoApp keeps an in-memory set of `folder:ordinal` keys currently being processed (mirrored for config-requests too), so a command that outlives a single `pollIntervalSeconds` tick doesn't get re-dispatched as a second, concurrent execution by the next tick.
 
 An exec request gets a `NNNNN_pid.json` the moment its command launches, the same "picked up" signal a Claude Code request gets. There is no ack file.
 
-A session can be **no-CC**: bootstrapped entirely by exec-requests, never invoking Claude Code. The first exec-request written into a brand-new session folder includes `workdir`, the same way a first regular request would, and GoApp creates `__session_conf.json` from it directly — with no Claude Code session ID yet. Such a session can still receive a regular request later, at which point it behaves exactly like one that had Claude Code from the start.
+A session can be **no-CC**: bootstrapped entirely by exec-requests, never invoking Claude Code. The first exec-request written into a brand-new session folder creates `__session_conf.json` directly — with no Claude Code session ID yet, and with a `workdir` only if the request carried one. Such a session can still receive a regular request later, at which point it behaves exactly like one that had Claude Code from the start.
 
 ### Cancel requests
 
@@ -76,16 +76,16 @@ A session can be **no-CC**: bootstrapped entirely by exec-requests, never invoki
 
 ### Session lifecycle
 
-- **New sessions** start with `00001_cc_request.json` including `workdir` (or `00001_exec_request.json` including `workdir`, for a no-CC session); the working directory is then immutable for that session's lifetime — a new repository always means a new session folder. The working directory is fixed by design, so one session always stays tied to one repository; this is a rule GoApp enforces, not a limit of `claude --resume`.
+- **New sessions** start with any request (`00001_cc_request.json`, or `00001_exec_request.json` for a no-CC session). `workdir` is optional on every request type: the first request that carries one sets it, after which it is immutable — a new repository always means a new session folder. A session with no `workdir` runs in `/tmp` (the least harmful place), and a later request that carries a `workdir` sets it. The working directory is fixed by design, so one session always stays tied to one repository; this is a rule GoApp enforces, not a limit of `claude --resume`.
 - **Session folder access.** Every Claude Code invocation gets the session's own folder through `--add-dir` (alongside `skillsCopyDir`), which is what makes files dropped into a session folder readable to Claude Code.
 - **PID files** (`NNNNN_pid.json`) record the Claude Code process ID for a given request as soon as it launches, well before the final response is ready. A missing PID file after a reasonable delay signals something failed before Claude Code even launched.
 - **Archiving** moves a finished session folder into the root's `_archived` folder (a plain Drive move), after which GoApp stops scanning it entirely.
 
 ### `__session_conf.json`
 
-Every session folder that has ever run a regular request or a no-CC-bootstrapping exec-request gets a `__session_conf.json`, written and owned entirely by GoApp — PC never reads or writes it (`instructions.md` explicitly tells PC to never touch it). It holds the session's fixed `workdir`, its `permissionMode`, and the Claude Code `sessionId` to resume (empty for a no-CC session that hasn't invoked Claude Code yet). GoApp only ever recognizes a folder as needing this file — and derives `workdir` from a request's payload — on the first request of that kind ever written into the folder; every session, including a no-CC one, has exactly one bootstrapping moment, not one per request type.
+Every session folder that has ever run a regular request or a no-CC-bootstrapping exec-request gets a `__session_conf.json`, written and owned entirely by GoApp — PC never reads or writes it (`instructions.md` explicitly tells PC to never touch it). It holds the session's `workdir` (empty until a request carries one), its `permissionMode`, and the Claude Code `sessionId` to resume (empty for a no-CC session that hasn't invoked Claude Code yet). GoApp creates it when the first Claude Code or exec request is written into the folder.
 
-A session folder with no `__session_conf.json` yet is a folder that has never received a first request (regular or exec) with `workdir`. Sending an exec-request into such a folder without `workdir` fails with `"no session configuration found"` — the folder is discoverable (GoApp scans for `_cc_request.json`, `_exec_request.json`, and `_config_request.json` files alike), but there's nothing to run the command against yet.
+Any request type makes a folder a session and gets handled: GoApp scans for `_cc_request.json`, `_exec_request.json` and `_config_request.json` files alike, and no request needs a prior request or a `workdir` to be answered. Config requests never touch `__session_conf.json` at all.
 
 ## Skills support
 

@@ -35,6 +35,20 @@ type requestPayload struct {
 	Brief          string `json:"brief,omitempty"`
 }
 
+// fallbackWorkdir is where a request runs when its session has no workdir. /tmp
+// is the least harmful place for a Claude Code or shell run that isn't tied to
+// any repository; PC can notice and send a request carrying a proper workdir.
+const fallbackWorkdir = "/tmp"
+
+// effectiveWorkdir returns the directory a request should run in: the
+// session's workdir, or fallbackWorkdir when the session has none.
+func effectiveWorkdir(workdir string) string {
+	if workdir == "" {
+		return fallbackWorkdir
+	}
+	return workdir
+}
+
 // inFlightSessions keeps track of all Claude Code invocations that are in progress and awaiting a response.
 // The mutex prevents having 2 Claude Code invocations in flight for the same folder at once, which would
 // cause confusion when responses come back. Unlike inFlightKeyed below, a folder's mark here is a real
@@ -518,19 +532,20 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	}
 
 	isNewSession := conf == nil
-	var workdir, permissionMode, resumeSessionID string
+	var confWorkdir, permissionMode, resumeSessionID string
 	if isNewSession {
-		if payload.Workdir == "" {
-			writeRequestError(requestFilePath, ordinal, sessionName, payload.Brief, "workdir is required on the first request of a new session")
-			return
-		}
-		workdir = payload.Workdir
+		confWorkdir = payload.Workdir
 		permissionMode = payload.PermissionMode
 		if permissionMode == "" {
 			permissionMode = cfg.PermissionMode
 		}
 	} else {
-		workdir = conf.Workdir
+		confWorkdir = conf.Workdir
+		if confWorkdir == "" {
+			// The session has no workdir yet (it started without one); a request
+			// that carries one sets it. Once set it is never changed.
+			confWorkdir = payload.Workdir
+		}
 		permissionMode = conf.PermissionMode
 		if payload.PermissionMode != "" {
 			permissionMode = payload.PermissionMode
@@ -544,6 +559,10 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 			permissionMode = cfg.PermissionMode
 		}
 		resumeSessionID = conf.SessionID
+	}
+	workdir := effectiveWorkdir(confWorkdir)
+	if confWorkdir == "" {
+		log.Printf("[%s][request_%s] - no workdir set for this session, running in %s\n", sessionName, ordinal, fallbackWorkdir)
 	}
 
 	tracker := claudecode.NewProgressTracker()
@@ -602,17 +621,17 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	case isNewSession && resp.SessionID != "":
 		err = session.SaveSessionConf(folder, &session.SessionConf{
 			SessionID:      resp.SessionID,
-			Workdir:        workdir,
+			Workdir:        confWorkdir,
 			PermissionMode: permissionMode,
 		})
-	case !isNewSession && (permissionMode != conf.PermissionMode || gainedSessionID):
+	case !isNewSession && (permissionMode != conf.PermissionMode || gainedSessionID || confWorkdir != conf.Workdir):
 		sessionID := conf.SessionID
 		if gainedSessionID {
 			sessionID = resp.SessionID
 		}
 		err = session.SaveSessionConf(folder, &session.SessionConf{
 			SessionID:      sessionID,
-			Workdir:        conf.Workdir,
+			Workdir:        confWorkdir,
 			PermissionMode: permissionMode,
 		})
 	default:
@@ -835,25 +854,30 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 	if conf == nil {
 		// No session has ever been established in this folder — support a
 		// no-CC session: one that only ever runs exec-requests and never
-		// invokes Claude Code at all. Same rule as a regular request's first
-		// message: workdir is required exactly once, to bootstrap the
-		// session, and __session_conf.json is created with no SessionID
-		// (there is no Claude Code session yet, and there may never be one).
-		if payload.Workdir == "" {
-			writeExecError(execRequestFilePath, ordinal, sessionName, payload.Brief, "workdir is required on the first request of a new session (no session configuration found yet)")
-			return
-		}
+		// invokes Claude Code at all. __session_conf.json is created with no
+		// SessionID (there is no Claude Code session yet, and there may never
+		// be one), and with whatever workdir the request carried — possibly
+		// none, since not every command relates to a working directory.
 		conf = &session.SessionConf{Workdir: payload.Workdir}
 		if err := session.SaveSessionConf(folder, conf); err != nil {
 			writeExecError(execRequestFilePath, ordinal, sessionName, payload.Brief, fmt.Sprintf("failed to save __session_conf.json: %v", err))
 			return
 		}
-		log.Printf("[%s][exec_%s] - initialized new no-CC session with workdir %s\n", sessionName, ordinal, conf.Workdir)
+		log.Printf("[%s][exec_%s] - initialized new no-CC session\n", sessionName, ordinal)
+	} else if conf.Workdir == "" && payload.Workdir != "" {
+		conf.Workdir = payload.Workdir
+		if err := session.SaveSessionConf(folder, conf); err != nil {
+			writeExecError(execRequestFilePath, ordinal, sessionName, payload.Brief, fmt.Sprintf("failed to save __session_conf.json: %v", err))
+			return
+		}
+	}
+	if conf.Workdir == "" {
+		log.Printf("[%s][exec_%s] - no workdir set for this session, running in %s\n", sessionName, ordinal, fallbackWorkdir)
 	}
 
 	result, err := shellexec.Invoke(shellexec.InvokeParams{
 		Command: payload.Command,
-		Workdir: conf.Workdir,
+		Workdir: effectiveWorkdir(conf.Workdir),
 		Timeout: time.Duration(cfg.TimeoutMinutes) * time.Minute,
 		OnLaunched: func(pid int) {
 			// The PID file is the "picked up" signal, exactly as for Claude Code
