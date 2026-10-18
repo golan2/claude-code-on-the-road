@@ -599,7 +599,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 
 	if err == nil {
 		if invoked := tracker.InvokedSkills(); len(invoked) > 0 {
-			log.Printf("[%s][request_%s] - skills invoked: %s\n", sessionName, ordinal, strings.Join(invoked, ", "))
+			log.Printf("[%s][request_%s] - skills invoked: %s\n", sessionName, ordinal, strings.Join(skillscopy.ShortenForLog(invoked), ", "))
 		}
 	}
 

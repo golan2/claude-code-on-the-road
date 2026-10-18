@@ -154,7 +154,7 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 	}
 
 	if copied > 0 || removed > 0 {
-		logf("skillscopy: copied %d, skipped %d (unchanged), removed %d, failed %d {%s}", copied, skipped, removed, failed, strings.Join(copiedNames, ","))
+		logf("skillscopy: copied %d, skipped %d (unchanged), removed %d, failed %d {%s}", copied, skipped, removed, failed, strings.Join(shortenCopiedNames(copiedNames), ","))
 	}
 	return nil
 }
@@ -191,6 +191,62 @@ func assignRootIdentifiers(roots []string) map[string]string {
 func skillDestName(rootID, relSkill string) string {
 	flatRelSkill := strings.ReplaceAll(filepath.ToSlash(relSkill), "/", "--")
 	return rootID + "__" + flatRelSkill
+}
+
+// ShortenForLog returns a display form of each skill name for log lines, in
+// input order. Purely cosmetic: the full names keep being used for everything
+// else. A "<source>__<seg1>--...--<segN>" name shortens to its last "--"
+// segment (or to the part after "__" when there is no "--"); any other name is
+// returned as-is. A name only shortens when no other distinct name in the same
+// slice shortens to the same thing, so ambiguous names stay fully qualified.
+func ShortenForLog(names []string) []string {
+	owners := make(map[string]map[string]bool)
+	for _, name := range names {
+		short := shortSkillName(name)
+		if owners[short] == nil {
+			owners[short] = make(map[string]bool)
+		}
+		owners[short][name] = true
+	}
+	out := make([]string, len(names))
+	for i, name := range names {
+		short := shortSkillName(name)
+		if len(owners[short]) > 1 {
+			out[i] = name
+		} else {
+			out[i] = short
+		}
+	}
+	return out
+}
+
+// shortSkillName is the unambiguous-or-not short form of a single skill name;
+// see ShortenForLog.
+func shortSkillName(name string) string {
+	_, suffix, ok := strings.Cut(name, "__")
+	if !ok {
+		return name
+	}
+	if i := strings.LastIndex(suffix, "--"); i >= 0 {
+		return suffix[i+len("--"):]
+	}
+	return suffix
+}
+
+// shortenCopiedNames applies ShortenForLog to the skill-folder part of each
+// "<destName>/<relFile>" entry in copiedNames, leaving the file part intact.
+// destName never contains "/", so the first "/" is always the boundary.
+func shortenCopiedNames(copiedNames []string) []string {
+	skills := make([]string, len(copiedNames))
+	files := make([]string, len(copiedNames))
+	for i, n := range copiedNames {
+		skills[i], files[i], _ = strings.Cut(n, "/")
+	}
+	out := ShortenForLog(skills)
+	for i := range out {
+		out[i] += "/" + files[i]
+	}
+	return out
 }
 
 // discoverSkillDirs finds every skill directory under root — one directly
