@@ -79,7 +79,7 @@ A session can be **no-CC**: bootstrapped entirely by exec-requests, never invoki
 - **New sessions** start with any request (`00001_cc_request.json`, or `00001_exec_request.json` for a no-CC session). `workdir` is optional on every request type: the first request that carries one sets it, after which it is immutable — a new repository always means a new session folder. A session with no `workdir` runs in `/tmp` (the least harmful place), and a later request that carries a `workdir` sets it. The working directory is fixed by design, so one session always stays tied to one repository; this is a rule GoApp enforces, not a limit of `claude --resume`.
 - **Session folder access.** Every Claude Code invocation gets the session's own folder through `--add-dir` (alongside `skillsCopyDir`), which is what makes files dropped into a session folder readable to Claude Code.
 - **PID files** (`NNNNN_pid.json`) record the Claude Code process ID for a given request as soon as it launches, well before the final response is ready. A missing PID file after a reasonable delay signals something failed before Claude Code even launched.
-- **Archiving** moves a finished session folder into the root's `_archived` folder (a plain Drive move), after which GoApp stops scanning it entirely.
+- **Archiving** moves a finished session folder into the root's `_archived` folder, after which GoApp stops scanning it entirely. GoApp does this itself at every start (see "Archiver"); PC can also move a named session there, and can move one back out.
 
 ### `__session_conf.json`
 
@@ -104,6 +104,12 @@ There is no skills setting on a request or a session. Skills are used by naming 
 GoApp spawns the `claude` CLI from an explicit absolute path, the required `claudePath` key in `config.json` (currently `/opt/homebrew/bin/claude`). There is no PATH lookup and no code-level default; startup fails fast if the key is missing, or the file doesn't exist or isn't executable, so a GoApp launched from an IDE or launcher with a minimal `PATH` can't fail later, mid-request.
 
 The subprocess inherits GoApp's environment with one override: `USER` is forced to the real OS account name. On macOS Claude Code finds its login credential in the keychain under the account named by `$USER`, so a `USER` that differs from the real account makes every request fail with `Not logged in · Please run /login`.
+
+## Archiver
+
+When `archiveAfterDays` is set in `config.json` (a positive number; absent or 0 turns it off, a negative number stops startup), GoApp archives idle sessions once at every start, before polling begins, so nothing is in flight. A session is idle when the newest modification time of its request, response and pid files is older than that many days. It is moved to `_archived/<name>`. An old unanswered request does not protect a folder. A folder whose name already exists in `_archived` is skipped and logged. When anything was archived GoApp logs one line, `archiver: archived N (idle > D days) {a,b,c}`.
+
+Drive Desktop may refresh file times on a re-sync, which can only make a folder look newer (not archived), never older. A folder moved back out of `_archived` keeps its old file times, so it is archived again at the next start unless a new request has arrived in it.
 
 ## Logging
 

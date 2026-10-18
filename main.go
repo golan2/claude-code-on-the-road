@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/golan2/claude-code-on-the-road/internal/applog"
+	"github.com/golan2/claude-code-on-the-road/internal/archiver"
 	"github.com/golan2/claude-code-on-the-road/internal/claudecode"
 	"github.com/golan2/claude-code-on-the-road/internal/config"
 	"github.com/golan2/claude-code-on-the-road/internal/response"
@@ -130,6 +131,11 @@ func main() {
 	sem := make(chan struct{}, cfg.MaxConcurrentSessions)
 
 	printRecentSessions(cfg.WatchFolder)
+
+	// Archive idle sessions before polling starts, so nothing is in flight.
+	if cfg.ArchiveAfterDays > 0 {
+		archiver.Run(cfg.WatchFolder, cfg.ArchiveAfterDays, time.Now(), log.Printf)
+	}
 
 	runSkillsCopy(cfg)
 	go func() {

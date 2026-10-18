@@ -59,6 +59,9 @@ type SimpleRepository struct {
 //   - ClaudePath: absolute path to the claude CLI binary GoApp spawns for every Claude Code request.
 //     No code-level default and no PATH lookup: it must be set in the config file and point to an
 //     existing executable file, or Load fails fast at startup.
+//   - ArchiveAfterDays: at every GoApp start, session folders with no request/response/pid activity for
+//     this many days are moved into the "_archived" folder. Absent or 0 means archiving is off (no default);
+//     a negative value fails Load.
 //   - SkillsCopyIntervalSeconds: how often, in seconds, GoApp re-scans SkillPaths for changed or
 //     deleted skill files and re-copies/cleans up accordingly. Defaults to 300 (5 minutes).
 type Config struct {
@@ -75,6 +78,7 @@ type Config struct {
 	SkillsCopyDir             string             `json:"skillsCopyDir"`
 	SkillsCopyIntervalSeconds int                `json:"skillsCopyIntervalSeconds"`
 	ClaudePath                string             `json:"claudePath"`
+	ArchiveAfterDays          int                `json:"archiveAfterDays"`
 }
 
 // Load reads the JSON configuration at path, applies defaults, and validates
@@ -172,6 +176,10 @@ func validate(cfg *Config) error {
 	// non-directory in the way) is fatal.
 	if err := os.MkdirAll(cfg.SkillsCopyDir, 0o755); err != nil {
 		return fmt.Errorf("skillsCopyDir %q could not be created: %w", cfg.SkillsCopyDir, err)
+	}
+
+	if cfg.ArchiveAfterDays < 0 {
+		return fmt.Errorf("archiveAfterDays must not be negative (got %d); use 0 or omit it to turn archiving off", cfg.ArchiveAfterDays)
 	}
 
 	if cfg.ClaudePath == "" {

@@ -11,6 +11,7 @@
   ],
   "skillsCopyDir": "/tmp/ccotr-skills",
   "claudePath": "/opt/homebrew/bin/claude",
+  "archiveAfterDays": 30,
   "simpleRepositories": [
     { "nickname": "algolib", "path": "/Users/izikgolan/git/platform/algolib" },
     { "nickname": "argocd-argo-workflows", "path": "/Users/izikgolan/git/platform/argocd-argo-workflows" },
