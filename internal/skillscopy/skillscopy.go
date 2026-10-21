@@ -88,8 +88,8 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 	rootIdentifiers := assignRootIdentifiers(cfg.SkillPaths)
 
 	seen := make(map[string]bool)
-	copied, skipped, failed := 0, 0, 0
-	var copiedNames []string
+	copied, restored, skipped, failed := 0, 0, 0, 0
+	var copiedNames, restoredNames []string
 
 	for _, root := range cfg.SkillPaths {
 		skillDirs, err := discoverSkillDirs(root)
@@ -125,9 +125,15 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 				}
 				modNano := info.ModTime().UnixNano()
 
+				destMissing := false
 				if existing, ok := st.Files[srcFile]; ok && existing.SourceModTimeUnixNano == modNano && existing.DestPath == destFile {
-					skipped++
-					return nil
+					// The state entry says this copy is current, but the copy may have been
+					// deleted since (e.g. by tmp cleanup), so only skip when it is still there.
+					if _, err := os.Stat(destFile); err == nil {
+						skipped++
+						return nil
+					}
+					destMissing = true
 				}
 
 				if err := copyOneFile(srcFile, destFile, filepath.Base(srcFile) == skillManifestName); err != nil {
@@ -136,6 +142,11 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 					return nil
 				}
 				st.Files[srcFile] = fileState{SourceModTimeUnixNano: modNano, DestPath: destFile}
+				if destMissing {
+					restored++
+					restoredNames = append(restoredNames, filepath.ToSlash(filepath.Join(destName, relFile)))
+					return nil
+				}
 				copied++
 				copiedNames = append(copiedNames, filepath.ToSlash(filepath.Join(destName, relFile)))
 				return nil
@@ -155,6 +166,9 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 
 	if copied > 0 || removed > 0 {
 		logf("skillscopy: copied %d, skipped %d (unchanged), removed %d, failed %d {%s}", copied, skipped, removed, failed, strings.Join(shortenCopiedNames(copiedNames), ","))
+	}
+	if restored > 0 {
+		logf("skillscopy: restored %d (dest missing) {%s}", restored, strings.Join(shortenCopiedNames(restoredNames), ","))
 	}
 	return nil
 }
