@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
@@ -121,6 +122,7 @@ func main() {
 	}
 	log.Printf("GoApp starting up (pid %d), logging to %s", os.Getpid(), cfg.LogFile)
 
+	warnIfAnotherRunning(cfg.WatchFolder)
 	writeStartupMarker(cfg.WatchFolder)
 	syncInstructions(cfg.WatchFolder)
 
@@ -163,6 +165,33 @@ const startupMarkerFileName = "goapp_started.json"
 type startupMarker struct {
 	StartedAt string `json:"startedAt"`
 	PID       int    `json:"pid"`
+}
+
+// warnIfAnotherRunning logs a WARNING when the marker left by the previous start
+// names a different process that is still alive. Two GoApps polling the same
+// folder each keep their own in-flight state, so both pick up and run every
+// request, and every log line appears twice. It only warns; it never stops
+// either process. It can only see the most recent earlier start, because each
+// start overwrites the marker, and a reused PID is possible, which is why the
+// other process's command line is printed for judgment.
+func warnIfAnotherRunning(watchFolder string) {
+	data, err := os.ReadFile(filepath.Join(watchFolder, startupMarkerFileName))
+	if err != nil {
+		return
+	}
+	var prev startupMarker
+	if err := json.Unmarshal(data, &prev); err != nil || prev.PID <= 0 || prev.PID == os.Getpid() {
+		return
+	}
+	out, err := exec.Command("ps", "-p", strconv.Itoa(prev.PID), "-o", "command=").Output()
+	command := strings.TrimSpace(string(out))
+	if err != nil || command == "" {
+		return
+	}
+	if len(command) > 160 {
+		command = command[:160] + "..."
+	}
+	log.Printf("WARNING: another GoApp may already be running: pid %d, started %s, command: %s", prev.PID, prev.StartedAt, command)
 }
 
 // writeStartupMarker overwrites startupMarkerFileName in watchFolder with the
@@ -521,7 +550,7 @@ func briefSuffix(brief string) string {
 func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string) {
 	sessionName := filepath.Base(folder)
 	if _, err := os.Stat(session.PidPathFor(folder, ordinal)); err == nil {
-		log.Printf("[%s][request_%s] - already started but unanswered (started by a previous run), reprocessing\n", sessionName, ordinal)
+		log.Printf("[%s][%s_cc][INFO] - already started but unanswered (started by a previous run), reprocessing\n", sessionName, ordinal)
 	}
 
 	payload, err := loadRequest(requestFilePath)
@@ -529,7 +558,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		writeRequestError(requestFilePath, ordinal, sessionName, "", err.Error())
 		return
 	}
-	log.Printf("[%s][request_%s] - sent to Claude Code%s\n", sessionName, ordinal, briefSuffix(payload.Brief))
+	log.Printf("[%s][%s_cc][REQ]%s\n", sessionName, ordinal, briefSuffix(payload.Brief))
 
 	conf, err := session.LoadSessionConf(folder)
 	if err != nil {
@@ -568,7 +597,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 	}
 	workdir := effectiveWorkdir(confWorkdir)
 	if confWorkdir == "" {
-		log.Printf("[%s][request_%s] - no workdir set for this session, running in %s\n", sessionName, ordinal, fallbackWorkdir)
+		log.Printf("[%s][%s_cc][INFO] - no workdir set for this session, running in %s\n", sessionName, ordinal, fallbackWorkdir)
 	}
 
 	tracker := claudecode.NewProgressTracker()
@@ -599,7 +628,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 
 	if err == nil {
 		if invoked := tracker.InvokedSkills(); len(invoked) > 0 {
-			log.Printf("[%s][request_%s] - skills invoked: %s\n", sessionName, ordinal, strings.Join(skillscopy.ShortenForLog(invoked), ", "))
+			log.Printf("[%s][%s_cc][INFO] - skills invoked: %s\n", sessionName, ordinal, strings.Join(skillscopy.ShortenForLog(invoked), ", "))
 		}
 	}
 
@@ -682,9 +711,9 @@ func processCancelRequest(folder, ordinal string) {
 	}
 
 	if resp.Status == "success" {
-		log.Printf("[%s][cancel_%s] - killed process group of pid %d\n", sessionName, ordinal, resp.PID)
+		log.Printf("[%s][%s_cancel][RES] [ok: killed process group of pid %d]\n", sessionName, ordinal, resp.PID)
 	} else {
-		log.Printf("ERROR: [%s][cancel_%s] - %s\n", sessionName, ordinal, resp.Message)
+		log.Printf("ERROR: [%s][%s_cancel][RES] [error: %s]\n", sessionName, ordinal, resp.Message)
 	}
 }
 
@@ -805,18 +834,18 @@ func writeRequestError(requestFilePath, ordinal, sessionName, brief, message str
 	if err := response.Write(session.ResponsePathFor(requestFilePath), resp); err != nil {
 		log.Printf("ERROR: %v", err)
 	}
-	log.Printf("ERROR: [%s][%s_cc_response] - written to folder%s\n", sessionName, ordinal, briefSuffix(brief))
+	log.Printf("ERROR: [%s][%s_cc][RES] [error: %s]%s\n", sessionName, ordinal, message, briefSuffix(brief))
 }
 
 func printCompletion(outcome, ordinal, sessionName, brief string) {
 	suffix := briefSuffix(brief)
 	switch outcome {
 	case response.OutcomeSuccess:
-		log.Printf("[%s][%s_cc_response] - written to folder%s\n", sessionName, ordinal, suffix)
+		log.Printf("[%s][%s_cc][RES] [success]%s\n", sessionName, ordinal, suffix)
 	case response.OutcomeClaudeCodeError:
-		log.Printf("ERROR: [%s][%s_cc_response] - written to folder%s\n", sessionName, ordinal, suffix)
+		log.Printf("ERROR: [%s][%s_cc][RES] [error]%s\n", sessionName, ordinal, suffix)
 	case response.OutcomeTimeout:
-		log.Printf("TIMEOUT: [%s][%s_cc_response] - written to folder%s\n", sessionName, ordinal, suffix)
+		log.Printf("TIMEOUT: [%s][%s_cc][RES] [timeout]%s\n", sessionName, ordinal, suffix)
 	}
 }
 
@@ -850,7 +879,7 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 		writeExecError(execRequestFilePath, ordinal, sessionName, "", err.Error())
 		return
 	}
-	log.Printf("[%s][exec_%s] - running shell command%s\n", sessionName, ordinal, briefSuffix(payload.Brief))
+	log.Printf("[%s][%s_exec][REQ]%s\n", sessionName, ordinal, briefSuffix(payload.Brief))
 
 	conf, err := session.LoadSessionConf(folder)
 	if err != nil {
@@ -869,7 +898,7 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 			writeExecError(execRequestFilePath, ordinal, sessionName, payload.Brief, fmt.Sprintf("failed to save __session_conf.json: %v", err))
 			return
 		}
-		log.Printf("[%s][exec_%s] - initialized new no-CC session\n", sessionName, ordinal)
+		log.Printf("[%s][%s_exec][INFO] - initialized new no-CC session\n", sessionName, ordinal)
 	} else if conf.Workdir == "" && payload.Workdir != "" {
 		conf.Workdir = payload.Workdir
 		if err := session.SaveSessionConf(folder, conf); err != nil {
@@ -878,7 +907,7 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 		}
 	}
 	if conf.Workdir == "" {
-		log.Printf("[%s][exec_%s] - no workdir set for this session, running in %s\n", sessionName, ordinal, fallbackWorkdir)
+		log.Printf("[%s][%s_exec][INFO] - no workdir set for this session, running in %s\n", sessionName, ordinal, fallbackWorkdir)
 	}
 
 	result, err := shellexec.Invoke(shellexec.InvokeParams{
@@ -912,9 +941,9 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 
 	suffix := briefSuffix(payload.Brief)
 	if resp.Error != "" {
-		log.Printf("ERROR: [%s][exec_response_%s] - %s%s\n", sessionName, ordinal, resp.Error, suffix)
+		log.Printf("ERROR: [%s][%s_exec][RES] [error: %s]%s\n", sessionName, ordinal, resp.Error, suffix)
 	} else {
-		log.Printf("[%s][exec_response_%s] - written to folder (exit %d)%s\n", sessionName, ordinal, resp.ExitCode, suffix)
+		log.Printf("[%s][%s_exec][RES] [exit %d]%s\n", sessionName, ordinal, resp.ExitCode, suffix)
 	}
 }
 
@@ -927,7 +956,7 @@ func writeExecError(execRequestFilePath, ordinal, sessionName, brief, message st
 	if err := response.Write(session.ExecResponsePathFor(execRequestFilePath), resp); err != nil {
 		log.Printf("ERROR: %v", err)
 	}
-	log.Printf("ERROR: [%s][exec_response_%s] - %s%s\n", sessionName, ordinal, message, briefSuffix(brief))
+	log.Printf("ERROR: [%s][%s_exec][RES] [error: %s]%s\n", sessionName, ordinal, message, briefSuffix(brief))
 }
 
 type configRequestPayload struct {
@@ -962,7 +991,7 @@ func processConfigRequest(cfg *config.Config, folder, ordinal, configRequestFile
 		writeConfigError(configRequestFilePath, ordinal, sessionName, "", err.Error())
 		return
 	}
-	log.Printf("[%s][config_%s] - resolving config key%s\n", sessionName, ordinal, briefSuffix(payload.Brief))
+	log.Printf("[%s][%s_config][REQ]%s\n", sessionName, ordinal, briefSuffix(payload.Brief))
 
 	resp := response.BuildConfig(cfg, payload.Key)
 	if err := response.Write(session.ConfigResponsePathFor(configRequestFilePath), resp); err != nil {
@@ -971,9 +1000,9 @@ func processConfigRequest(cfg *config.Config, folder, ordinal, configRequestFile
 
 	suffix := briefSuffix(payload.Brief)
 	if resp.Error != "" {
-		log.Printf("ERROR: [%s][config_response_%s] - %s%s\n", sessionName, ordinal, resp.Error, suffix)
+		log.Printf("ERROR: [%s][%s_config][RES] [error: %s]%s\n", sessionName, ordinal, resp.Error, suffix)
 	} else {
-		log.Printf("[%s][config_response_%s] - written to folder%s\n", sessionName, ordinal, suffix)
+		log.Printf("[%s][%s_config][RES] [ok]%s\n", sessionName, ordinal, suffix)
 	}
 }
 
@@ -982,5 +1011,5 @@ func writeConfigError(configRequestFilePath, ordinal, sessionName, brief, messag
 	if err := response.Write(session.ConfigResponsePathFor(configRequestFilePath), resp); err != nil {
 		log.Printf("ERROR: %v", err)
 	}
-	log.Printf("ERROR: [%s][config_response_%s] - %s%s\n", sessionName, ordinal, message, briefSuffix(brief))
+	log.Printf("ERROR: [%s][%s_config][RES] [error: %s]%s\n", sessionName, ordinal, message, briefSuffix(brief))
 }

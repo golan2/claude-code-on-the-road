@@ -115,6 +115,10 @@ Drive Desktop may refresh file times on a re-sync, which can only make a folder 
 
 Every event GoApp prints to stdout — startup, request/response/exec/config activity, warnings, and errors — is also appended to a log file, so history survives after the terminal is gone and after restarts. The path defaults to `goapp.log` (relative to the working directory GoApp is run from) and is configurable via `logFile` in `config.json`. It's opened in append mode, so it accumulates across runs rather than being wiped on each restart; the startup line records the PID so you can tell one run's entries apart from another's.
 
+At startup GoApp checks the previous `goapp_started.json`: if the process it names is still alive, GoApp logs `WARNING: another GoApp may already be running: pid N, started ..., command: ...`. Two GoApps on one folder each run every request and write every log line twice. It only warns and never stops either process, and it can see only the most recent earlier start, because each start overwrites the marker.
+
+Every request gets a `REQ` line and a `RES` line with the same prefix, `[session][NNNNN_type]`, where `type` is `cc`, `exec`, `config` or `cancel`. All types look the same; only the type differs: `[s1][00002_exec][REQ] - brief: "say hi"` then `[s1][00002_exec][RES] [exit 0] - brief: "say hi"`. The bracket after `RES` is the outcome: `exit N` (exec), `success`, `error` or `timeout` (cc), `ok` (config, cancel), and `error: <message>` on any failure. A failed response starts with `ERROR:` and a timed-out Claude Code one with `TIMEOUT:`. Side notes about a request (no workdir, skills invoked, and so on) use `[INFO]`.
+
 A panic in any single request's handling is caught and logged with a full stack trace, and does not take down the rest of the process. Every goroutine is wrapped in `recoverPanic`.
 
 ## Work tracking

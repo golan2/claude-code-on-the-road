@@ -165,10 +165,10 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 	}
 
 	if copied > 0 || removed > 0 {
-		logf("skillscopy: copied %d, skipped %d (unchanged), removed %d, failed %d {%s}", copied, skipped, removed, failed, strings.Join(shortenCopiedNames(copiedNames), ","))
+		logf("skillscopy: copied %d, skipped %d (unchanged), removed %d, failed %d {%s}", copied, skipped, removed, failed, strings.Join(copiedSkillNames(copiedNames), ","))
 	}
 	if restored > 0 {
-		logf("skillscopy: restored %d (dest missing) {%s}", restored, strings.Join(shortenCopiedNames(restoredNames), ","))
+		logf("skillscopy: restored %d (dest missing) {%s}", restored, strings.Join(copiedSkillNames(restoredNames), ","))
 	}
 	return nil
 }
@@ -247,20 +247,21 @@ func shortSkillName(name string) string {
 	return suffix
 }
 
-// shortenCopiedNames applies ShortenForLog to the skill-folder part of each
-// "<destName>/<relFile>" entry in copiedNames, leaving the file part intact.
-// destName never contains "/", so the first "/" is always the boundary.
-func shortenCopiedNames(copiedNames []string) []string {
-	skills := make([]string, len(copiedNames))
-	files := make([]string, len(copiedNames))
-	for i, n := range copiedNames {
-		skills[i], files[i], _ = strings.Cut(n, "/")
+// copiedSkillNames reduces "<destName>/<relFile>" entries to the distinct skill
+// they belong to, in first-seen order, in the short display form from
+// ShortenForLog. A log line then names each skill once instead of listing every
+// file in it. destName never contains "/", so the first "/" is the boundary.
+func copiedSkillNames(copiedNames []string) []string {
+	var skills []string
+	seen := make(map[string]bool)
+	for _, n := range copiedNames {
+		skill, _, _ := strings.Cut(n, "/")
+		if !seen[skill] {
+			seen[skill] = true
+			skills = append(skills, skill)
+		}
 	}
-	out := ShortenForLog(skills)
-	for i := range out {
-		out[i] += "/" + files[i]
-	}
-	return out
+	return ShortenForLog(skills)
 }
 
 // discoverSkillDirs finds every skill directory under root — one directly
