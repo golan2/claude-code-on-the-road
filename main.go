@@ -28,6 +28,7 @@ import (
 	"github.com/golan2/claude-code-on-the-road/internal/session"
 	"github.com/golan2/claude-code-on-the-road/internal/shellexec"
 	"github.com/golan2/claude-code-on-the-road/internal/skillscopy"
+	"github.com/golan2/claude-code-on-the-road/internal/startupmarker"
 )
 
 type requestPayload struct {
@@ -123,7 +124,11 @@ func main() {
 	log.Printf("GoApp starting up (pid %d), logging to %s", os.Getpid(), cfg.LogFile)
 
 	warnIfAnotherRunning(cfg.WatchFolder)
-	writeStartupMarker(cfg.WatchFolder)
+	startedAt := time.Now()
+	startup := startupmarker.New(filepath.Join(cfg.WatchFolder, startupmarker.FileName), startedAt, os.Getpid())
+	if err := startup.Write(startedAt); err != nil {
+		log.Printf("ERROR: %v", err)
+	}
 	syncInstructions(cfg.WatchFolder)
 
 	inFlight := &inFlightSessions{processing: make(map[string]bool)}
@@ -153,18 +158,11 @@ func main() {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		if err := startup.Write(time.Now()); err != nil {
+			log.Printf("ERROR: %v", err)
+		}
 		pollOnce(cfg, inFlight, inFlightExecs, inFlightConfigs, inFlightCancels, sem)
 	}
-}
-
-// startupMarkerFileName is written directly into the watch folder root (not
-// into any session folder) so PhoneClaude (and the user) can tell if GoApp is alive
-// and see when it last started.
-const startupMarkerFileName = "goapp_started.json"
-
-type startupMarker struct {
-	StartedAt string `json:"startedAt"`
-	PID       int    `json:"pid"`
 }
 
 // warnIfAnotherRunning logs a WARNING when the marker left by the previous start
@@ -175,11 +173,11 @@ type startupMarker struct {
 // start overwrites the marker, and a reused PID is possible, which is why the
 // other process's command line is printed for judgment.
 func warnIfAnotherRunning(watchFolder string) {
-	data, err := os.ReadFile(filepath.Join(watchFolder, startupMarkerFileName))
+	data, err := os.ReadFile(filepath.Join(watchFolder, startupmarker.FileName))
 	if err != nil {
 		return
 	}
-	var prev startupMarker
+	var prev startupmarker.Marker
 	if err := json.Unmarshal(data, &prev); err != nil || prev.PID <= 0 || prev.PID == os.Getpid() {
 		return
 	}
@@ -192,24 +190,6 @@ func warnIfAnotherRunning(watchFolder string) {
 		command = command[:160] + "..."
 	}
 	log.Printf("WARNING: another GoApp may already be running: pid %d, started %s, command: %s", prev.PID, prev.StartedAt, command)
-}
-
-// writeStartupMarker overwrites startupMarkerFileName in watchFolder with the
-// current startup info. Any previous marker from an earlier run is replaced,
-// since only the most recent start matters.
-func writeStartupMarker(watchFolder string) {
-	marker := startupMarker{
-		StartedAt: time.Now().Format(time.RFC3339),
-		PID:       os.Getpid(),
-	}
-	data, err := json.MarshalIndent(marker, "", "  ")
-	if err != nil {
-		log.Printf("ERROR: %v", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(watchFolder, startupMarkerFileName), data, 0o644); err != nil {
-		log.Printf("ERROR: %v", err)
-	}
 }
 
 // instructionsFileName is used both for the local copy read from the repo
