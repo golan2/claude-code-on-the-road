@@ -12,6 +12,12 @@
   "skillsCopyDir": "/tmp/ccotr-skills",
   "claudePath": "/opt/homebrew/bin/claude",
   "archiveAfterDays": 30,
+  "models": [
+    { "name": "fable",  "id": "claude-fable-5-1",          "grade": "most capable", "useFor": "the hardest problems: deep architecture, long multi-step investigations" },
+    { "name": "opus",   "id": "claude-opus-5-5",           "grade": "high",         "useFor": "complex coding, debugging and design work" },
+    { "name": "sonnet", "id": "claude-sonnet-5",           "grade": "balanced",     "useFor": "everyday coding, reviews and questions" },
+    { "name": "haiku",  "id": "claude-haiku-4-5-20251001", "grade": "fast",         "useFor": "quick lookups, simple edits, cheap high-volume tasks" }
+  ],
   "simpleRepositories": [
     { "nickname": "algolib", "path": "/Users/izikgolan/git/platform/algolib" },
     { "nickname": "argocd-argo-workflows", "path": "/Users/izikgolan/git/platform/argocd-argo-workflows" },

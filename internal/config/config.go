@@ -19,6 +19,17 @@ const (
 	defaultSkillsCopyIntervalSeconds = 300
 )
 
+// Model is one entry of the models config list: a model PC may choose with the
+// "model" field of a Claude Code request. Name is the short name PC sends, ID is
+// the full model id GoApp passes to claude --model (so the version is pinned
+// here, not left to an alias), and Grade and UseFor tell PC what it is for.
+type Model struct {
+	Name   string `json:"name"`
+	ID     string `json:"id"`
+	Grade  string `json:"grade"`
+	UseFor string `json:"useFor"`
+}
+
 // SimpleRepository is one entry of the simpleRepositories config list,
 // returned verbatim as the value of a "simpleRepositories" config-request.
 type SimpleRepository struct {
@@ -62,6 +73,9 @@ type SimpleRepository struct {
 //   - ArchiveAfterDays: at every GoApp start, session folders with no request/response/pid activity for
 //     this many days are moved into the "_archived" folder. Absent or 0 means archiving is off (no default);
 //     a negative value fails Load.
+//   - Models: the models PC may select per session with the "model" request field, read by PC with a
+//     config-request on key "models". Absent means no model can be selected and requests use claude's
+//     own default. Names must be unique and every entry needs a name and an id.
 //   - SkillsCopyIntervalSeconds: how often, in seconds, GoApp re-scans SkillPaths for changed or
 //     deleted skill files and re-copies/cleans up accordingly. Defaults to 300 (5 minutes).
 type Config struct {
@@ -79,6 +93,7 @@ type Config struct {
 	SkillsCopyIntervalSeconds int                `json:"skillsCopyIntervalSeconds"`
 	ClaudePath                string             `json:"claudePath"`
 	ArchiveAfterDays          int                `json:"archiveAfterDays"`
+	Models                    []Model            `json:"models"`
 }
 
 // Load reads the JSON configuration at path, applies defaults, and validates
@@ -180,6 +195,17 @@ func validate(cfg *Config) error {
 
 	if cfg.ArchiveAfterDays < 0 {
 		return fmt.Errorf("archiveAfterDays must not be negative (got %d); use 0 or omit it to turn archiving off", cfg.ArchiveAfterDays)
+	}
+
+	seenModels := make(map[string]bool)
+	for i, m := range cfg.Models {
+		if m.Name == "" || m.ID == "" {
+			return fmt.Errorf("models[%d] needs both a name and an id", i)
+		}
+		if seenModels[m.Name] {
+			return fmt.Errorf("models has duplicate name %q", m.Name)
+		}
+		seenModels[m.Name] = true
 	}
 
 	if cfg.ClaudePath == "" {

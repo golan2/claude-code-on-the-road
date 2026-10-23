@@ -20,6 +20,8 @@ type InvokeParams struct {
 	Prompt          string
 	Workdir         string           // subprocess working directory (cwd)
 	PermissionMode  string           // passed as --permission-mode
+	Model           string           // if non-empty, passed as --model (a full model id)
+	Effort          string           // if non-empty, passed as --effort
 	AddDirs         []string         // each passed as its own --add-dir
 	ResumeSessionID string           // if non-empty, pass --resume <value>; if empty, brand-new session
 	Timeout         time.Duration    // hard wall-clock limit for the subprocess
@@ -267,6 +269,12 @@ func buildArgs(params InvokeParams) []string {
 		"--output-format", "stream-json",
 		"--verbose", // required by the claude CLI when --print is combined with stream-json
 		"--permission-mode", params.PermissionMode,
+	}
+	if params.Model != "" {
+		args = append(args, "--model", params.Model)
+	}
+	if params.Effort != "" {
+		args = append(args, "--effort", params.Effort)
 	}
 	for _, dir := range params.AddDirs {
 		args = append(args, "--add-dir", dir)

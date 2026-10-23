@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,6 +36,8 @@ type requestPayload struct {
 	Prompt         string `json:"prompt"`
 	Workdir        string `json:"workdir,omitempty"`
 	PermissionMode string `json:"permissionMode,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Effort         string `json:"effort,omitempty"`
 	Brief          string `json:"brief,omitempty"`
 }
 
@@ -527,6 +530,39 @@ func briefSuffix(brief string) string {
 	return fmt.Sprintf(" - brief: %q", trimBrief(brief))
 }
 
+// effortLevels are the values claude --effort accepts.
+var effortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
+// validateEffort accepts an empty effort (claude's own default) or one of
+// effortLevels, and otherwise returns an error that lists the allowed values.
+func validateEffort(effort string) error {
+	if effort == "" || slices.Contains(effortLevels, effort) {
+		return nil
+	}
+	return fmt.Errorf("unknown effort %q; allowed: %s", effort, strings.Join(effortLevels, ", "))
+}
+
+// resolveModel maps a model's short name to the full id from cfg.Models. An
+// empty name means "no model chosen" and resolves to "", so claude uses its
+// own default. A name that isn't configured is an error that lists the
+// allowed names, so a typo never reaches claude.
+func resolveModel(cfg *config.Config, name string) (string, error) {
+	if name == "" {
+		return "", nil
+	}
+	if len(cfg.Models) == 0 {
+		return "", fmt.Errorf("model %q was requested but no models are configured in config.json", name)
+	}
+	names := make([]string, 0, len(cfg.Models))
+	for _, m := range cfg.Models {
+		if m.Name == name {
+			return m.ID, nil
+		}
+		names = append(names, m.Name)
+	}
+	return "", fmt.Errorf("unknown model %q; allowed: %s", name, strings.Join(names, ", "))
+}
+
 func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string) {
 	sessionName := filepath.Base(folder)
 	if _, err := os.Stat(session.PidPathFor(folder, ordinal)); err == nil {
@@ -575,6 +611,26 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		}
 		resumeSessionID = conf.SessionID
 	}
+	// The model is sticky for the session, like permissionMode: a request's
+	// model replaces the stored one. The stored value is the short name, so a
+	// version change in config.json takes effect on the next request.
+	modelName := payload.Model
+	if modelName == "" && !isNewSession {
+		modelName = conf.Model
+	}
+	modelID, err := resolveModel(cfg, modelName)
+	if err != nil {
+		writeRequestError(requestFilePath, ordinal, sessionName, payload.Brief, err.Error())
+		return
+	}
+	effort := payload.Effort
+	if effort == "" && !isNewSession {
+		effort = conf.Effort
+	}
+	if err := validateEffort(effort); err != nil {
+		writeRequestError(requestFilePath, ordinal, sessionName, payload.Brief, err.Error())
+		return
+	}
 	workdir := effectiveWorkdir(confWorkdir)
 	if confWorkdir == "" {
 		log.Printf("[%s][%s_cc][INFO] - no workdir set for this session, running in %s\n", sessionName, ordinal, fallbackWorkdir)
@@ -593,6 +649,8 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		Prompt:          payload.Prompt,
 		Workdir:         workdir,
 		PermissionMode:  permissionMode,
+		Model:           modelID,
+		Effort:          effort,
 		AddDirs:         []string{folder, cfg.SkillsCopyDir},
 		ResumeSessionID: resumeSessionID,
 		Timeout:         time.Duration(cfg.TimeoutMinutes) * time.Minute,
@@ -638,8 +696,10 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 			SessionID:      resp.SessionID,
 			Workdir:        confWorkdir,
 			PermissionMode: permissionMode,
+			Model:          modelName,
+			Effort:         effort,
 		})
-	case !isNewSession && (permissionMode != conf.PermissionMode || gainedSessionID || confWorkdir != conf.Workdir):
+	case !isNewSession && (permissionMode != conf.PermissionMode || gainedSessionID || confWorkdir != conf.Workdir || modelName != conf.Model || effort != conf.Effort):
 		sessionID := conf.SessionID
 		if gainedSessionID {
 			sessionID = resp.SessionID
@@ -648,6 +708,8 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 			SessionID:      sessionID,
 			Workdir:        confWorkdir,
 			PermissionMode: permissionMode,
+			Model:          modelName,
+			Effort:         effort,
 		})
 	default:
 		err = nil

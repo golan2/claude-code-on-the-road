@@ -40,6 +40,8 @@ type SessionConf struct {
 	SessionID      string `json:"sessionId"`
 	Workdir        string `json:"workdir"`
 	PermissionMode string `json:"permissionMode"`
+	Model          string `json:"model,omitempty"`  // short name from config models; empty = claude default
+	Effort         string `json:"effort,omitempty"` // low|medium|high|xhigh|max; empty = claude default
 }
 
 // LoadSessionConf reads __session_conf.json from sessionFolderPath. It returns
