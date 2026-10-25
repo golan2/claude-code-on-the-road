@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,7 +39,9 @@ type requestPayload struct {
 	PermissionMode string `json:"permissionMode,omitempty"`
 	Model          string `json:"model,omitempty"`
 	Effort         string `json:"effort,omitempty"`
-	Brief          string `json:"brief,omitempty"`
+	// Timeout, in minutes, overrides the default timeout for this request only.
+	Timeout *float64 `json:"timeout,omitempty"`
+	Brief   string   `json:"brief,omitempty"`
 }
 
 // fallbackWorkdir is where a request runs when its session has no workdir. /tmp
@@ -542,6 +545,28 @@ func validateEffort(effort string) error {
 	return fmt.Errorf("unknown effort %q; allowed: %s", effort, strings.Join(effortLevels, ", "))
 }
 
+// effectiveTimeout returns how long one request's process may run: the
+// request's own timeout (minutes, may be fractional) when present, otherwise
+// the configured default. A present value must be positive and representable
+// as a time.Duration; anything else is an error, so the request is rejected
+// rather than run with a limit nobody asked for. There is no upper cap.
+func effectiveTimeout(defaultMinutes int, requested *float64) (time.Duration, error) {
+	if requested == nil {
+		return time.Duration(defaultMinutes) * time.Minute, nil
+	}
+	if *requested <= 0 {
+		return 0, fmt.Errorf("timeout must be a positive number of minutes (got %v)", *requested)
+	}
+	if *requested > float64(math.MaxInt64)/float64(time.Minute) {
+		return 0, fmt.Errorf("timeout of %v minutes is too large", *requested)
+	}
+	timeout := time.Duration(*requested * float64(time.Minute))
+	if timeout <= 0 {
+		return 0, fmt.Errorf("timeout of %v minutes is too small", *requested)
+	}
+	return timeout, nil
+}
+
 // resolveModel maps a model's short name to the full id from cfg.Models. An
 // empty name means "no model chosen" and resolves to "", so claude uses its
 // own default. A name that isn't configured is an error that lists the
@@ -574,7 +599,12 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		writeRequestError(requestFilePath, ordinal, sessionName, "", err.Error())
 		return
 	}
-	log.Printf("[%s][%s_cc][REQ]%s\n", sessionName, ordinal, briefSuffix(payload.Brief))
+	timeout, err := effectiveTimeout(cfg.TimeoutMinutes, payload.Timeout)
+	if err != nil {
+		writeRequestError(requestFilePath, ordinal, sessionName, payload.Brief, err.Error())
+		return
+	}
+	log.Printf("[%s][%s_cc][REQ] - timeout %s%s\n", sessionName, ordinal, timeout, briefSuffix(payload.Brief))
 
 	conf, err := session.LoadSessionConf(folder)
 	if err != nil {
@@ -653,7 +683,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		Effort:          effort,
 		AddDirs:         []string{folder, cfg.SkillsCopyDir},
 		ResumeSessionID: resumeSessionID,
-		Timeout:         time.Duration(cfg.TimeoutMinutes) * time.Minute,
+		Timeout:         timeout,
 		Progress:        tracker,
 		OnLaunched: func(pid int) {
 			if err := writePidFile(session.PidPathFor(folder, ordinal), pid); err != nil {
@@ -894,7 +924,9 @@ func printCompletion(outcome, ordinal, sessionName, brief string) {
 type execRequestPayload struct {
 	Command string `json:"command"`
 	Workdir string `json:"workdir,omitempty"`
-	Brief   string `json:"brief,omitempty"`
+	// Timeout, in minutes, overrides the default timeout for this command only.
+	Timeout *float64 `json:"timeout,omitempty"`
+	Brief   string   `json:"brief,omitempty"`
 }
 
 func loadExecRequest(path string) (*execRequestPayload, error) {
@@ -921,7 +953,12 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 		writeExecError(execRequestFilePath, ordinal, sessionName, "", err.Error())
 		return
 	}
-	log.Printf("[%s][%s_exec][REQ]%s\n", sessionName, ordinal, briefSuffix(payload.Brief))
+	timeout, err := effectiveTimeout(cfg.TimeoutMinutes, payload.Timeout)
+	if err != nil {
+		writeExecError(execRequestFilePath, ordinal, sessionName, payload.Brief, err.Error())
+		return
+	}
+	log.Printf("[%s][%s_exec][REQ] - timeout %s%s\n", sessionName, ordinal, timeout, briefSuffix(payload.Brief))
 
 	conf, err := session.LoadSessionConf(folder)
 	if err != nil {
@@ -955,7 +992,7 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 	result, err := shellexec.Invoke(shellexec.InvokeParams{
 		Command: payload.Command,
 		Workdir: effectiveWorkdir(conf.Workdir),
-		Timeout: time.Duration(cfg.TimeoutMinutes) * time.Minute,
+		Timeout: timeout,
 		OnLaunched: func(pid int) {
 			// The PID file is the "picked up" signal, exactly as for Claude Code
 			// requests, and it is what makes the command cancellable from the
