@@ -128,6 +128,9 @@ func main() {
 		defer logFile.Close()
 	}
 	log.Printf("GoApp starting up (pid %d), logging to %s", os.Getpid(), cfg.LogFile)
+	for _, w := range cfg.Warnings {
+		log.Printf("WARNING: %s", w)
+	}
 
 	warnIfAnotherRunning(cfg.WatchFolder)
 	startedAt := time.Now()
@@ -599,7 +602,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		writeRequestError(requestFilePath, ordinal, sessionName, "", err.Error())
 		return
 	}
-	timeout, err := effectiveTimeout(cfg.TimeoutMinutes, payload.Timeout)
+	timeout, err := effectiveTimeout(cfg.DefaultTimeoutMinutes, payload.Timeout)
 	if err != nil {
 		writeRequestError(requestFilePath, ordinal, sessionName, payload.Brief, err.Error())
 		return
@@ -953,7 +956,7 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 		writeExecError(execRequestFilePath, ordinal, sessionName, "", err.Error())
 		return
 	}
-	timeout, err := effectiveTimeout(cfg.TimeoutMinutes, payload.Timeout)
+	timeout, err := effectiveTimeout(cfg.DefaultTimeoutMinutes, payload.Timeout)
 	if err != nil {
 		writeExecError(execRequestFilePath, ordinal, sessionName, payload.Brief, err.Error())
 		return

@@ -46,7 +46,10 @@ type SimpleRepository struct {
 //
 //   - WatchFolder: absolute path to the Drive-synced root folder GoApp polls for session folders.
 //   - PollIntervalSeconds: how often, in seconds, GoApp scans for new requests.
-//   - TimeoutMinutes: how long a Claude Code or exec-request subprocess may run before being killed.
+//   - DefaultTimeoutMinutes: the default hard wall-clock limit, in minutes, on a Claude Code or
+//     exec-request subprocess, read from the "defaultTimeout" key. A request's own "timeout" overrides
+//     it for that request. Defaults to 10. The old "timeoutMinutes" key is still read when
+//     "defaultTimeout" is absent; see applyTimeoutFallback.
 //   - PermissionMode: the default Claude Code permission mode used when a request doesn't specify one.
 //   - MaxConcurrentSessions: the maximum number of Claude Code invocations allowed to run at once.
 //   - ExecOutputMaxChars: the cap, in characters, on exec-response output before it is truncated.
@@ -81,7 +84,7 @@ type SimpleRepository struct {
 type Config struct {
 	WatchFolder               string             `json:"watchFolder"`
 	PollIntervalSeconds       int                `json:"pollIntervalSeconds"`
-	TimeoutMinutes            int                `json:"timeoutMinutes"`
+	DefaultTimeoutMinutes     int                `json:"defaultTimeout"`
 	PermissionMode            string             `json:"permissionMode"`
 	MaxConcurrentSessions     int                `json:"maxConcurrentSessions"`
 	ExecOutputMaxChars        int                `json:"execOutputMaxChars"`
@@ -94,6 +97,17 @@ type Config struct {
 	ClaudePath                string             `json:"claudePath"`
 	ArchiveAfterDays          int                `json:"archiveAfterDays"`
 	Models                    []Model            `json:"models"`
+	// Warnings are notices produced by Load, such as a deprecated key. They are
+	// not config.json keys, so they are excluded from config-requests.
+	Warnings []string `json:"-"`
+}
+
+// legacyFile is what Load decodes the config file into: Config, plus the
+// pre-rename timeoutMinutes key. That key lives here rather than in Config so
+// it never shows up as a queryable config-request key.
+type legacyFile struct {
+	Config
+	TimeoutMinutes *int `json:"timeoutMinutes"`
 }
 
 // Load reads the JSON configuration at path, applies defaults, and validates
@@ -106,13 +120,15 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file %q: %w", path, err)
 	}
 
-	var cfg Config
+	var file legacyFile
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&cfg); err != nil {
+	if err := decoder.Decode(&file); err != nil {
 		return nil, fmt.Errorf("failed to parse config file %q: %w", path, err)
 	}
 
+	cfg := file.Config
+	applyTimeoutFallback(&cfg, file.TimeoutMinutes)
 	applyDefaults(&cfg)
 
 	if err := validate(&cfg); err != nil {
@@ -122,12 +138,27 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// applyTimeoutFallback reads the pre-rename timeoutMinutes key when defaultTimeout
+// is absent, and records a deprecation warning whenever the old key is present.
+// When both keys are set, defaultTimeout wins and the old key is reported as ignored.
+func applyTimeoutFallback(cfg *Config, legacy *int) {
+	if legacy == nil {
+		return
+	}
+	if cfg.DefaultTimeoutMinutes == 0 {
+		cfg.DefaultTimeoutMinutes = *legacy
+		cfg.Warnings = append(cfg.Warnings, `config key "timeoutMinutes" is deprecated; rename it to "defaultTimeout"`)
+		return
+	}
+	cfg.Warnings = append(cfg.Warnings, `config key "timeoutMinutes" is ignored because "defaultTimeout" is set; remove it`)
+}
+
 func applyDefaults(cfg *Config) {
 	if cfg.PollIntervalSeconds == 0 {
 		cfg.PollIntervalSeconds = defaultPollIntervalSeconds
 	}
-	if cfg.TimeoutMinutes == 0 {
-		cfg.TimeoutMinutes = defaultTimeoutMinutes
+	if cfg.DefaultTimeoutMinutes == 0 {
+		cfg.DefaultTimeoutMinutes = defaultTimeoutMinutes
 	}
 	if cfg.PermissionMode == "" {
 		cfg.PermissionMode = defaultPermissionMode
@@ -191,6 +222,10 @@ func validate(cfg *Config) error {
 	// non-directory in the way) is fatal.
 	if err := os.MkdirAll(cfg.SkillsCopyDir, 0o755); err != nil {
 		return fmt.Errorf("skillsCopyDir %q could not be created: %w", cfg.SkillsCopyDir, err)
+	}
+
+	if cfg.DefaultTimeoutMinutes < 0 {
+		return fmt.Errorf("defaultTimeout must not be negative (got %d)", cfg.DefaultTimeoutMinutes)
 	}
 
 	if cfg.ArchiveAfterDays < 0 {

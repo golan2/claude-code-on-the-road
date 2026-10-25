@@ -28,7 +28,7 @@ It has to be run from the repo root because `config.json` is read from the curre
 |---|---|---|
 | `watchFolder` | required | The Drive-synced root folder GoApp polls for session folders. |
 | `pollIntervalSeconds` | 5 | How often GoApp rescans the folder tree for new requests. |
-| `timeoutMinutes` | 10 | How long a Claude Code or exec subprocess may run before it is killed. |
+| `defaultTimeout` | 10 | The default limit, in minutes, on how long a Claude Code or exec subprocess may run before it is killed. A request's own `timeout` overrides it for that request only. The old key `timeoutMinutes` is still read when `defaultTimeout` is absent, with a deprecation warning at startup. |
 | `permissionMode` | `bypassPermissions` | The default Claude Code permission mode. A request's own `permissionMode` overrides it for that request and every later request in the session. |
 | `maxConcurrentSessions` | 10 | The most Claude Code invocations allowed to run at once. |
 
@@ -38,7 +38,7 @@ The other keys (`models`, `claudePath`, `skillsCopyDir`, `skillPaths`, `skillsCo
 
 Claude Code requests in the same session folder run strictly one at a time, in ordinal order. Different session folders run in parallel, up to `maxConcurrentSessions`. Exec and config requests bypass the per-session lock entirely.
 
-When a Claude Code request or exec command exceeds `timeoutMinutes`, GoApp kills the whole process group, so Claude's own child processes aren't left orphaned. A `timeout` response carries an error message and no output.
+When a Claude Code request or exec command exceeds its timeout (the request's `timeout`, or `defaultTimeout` when it has none), GoApp kills the whole process group, so Claude's own child processes aren't left orphaned. A Claude Code `timeout` response carries an error message and no output; an exec `timeout` response keeps the output produced before the kill.
 
 ## Protocol features
 
