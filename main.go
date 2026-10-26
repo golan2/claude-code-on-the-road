@@ -548,6 +548,17 @@ func validateEffort(effort string) error {
 	return fmt.Errorf("unknown effort %q; allowed: %s", effort, strings.Join(effortLevels, ", "))
 }
 
+// timeoutTag is the " [TO=<n>min]" suffix a REQ log line carries, after the
+// brief, when a request's timeout is longer than the configured default. It is
+// empty for the default or anything shorter, so an ordinary request logs no
+// timeout and a long one stands out. Fractional minutes are kept (2.5 -> "2.5").
+func timeoutTag(timeout time.Duration, defaultMinutes int) string {
+	if timeout <= time.Duration(defaultMinutes)*time.Minute {
+		return ""
+	}
+	return " [TO=" + strconv.FormatFloat(timeout.Minutes(), 'f', -1, 64) + "min]"
+}
+
 // effectiveTimeout returns how long one request's process may run: the
 // request's own timeout (minutes, may be fractional) when present, otherwise
 // the configured default. A present value must be positive and representable
@@ -607,7 +618,7 @@ func processRequest(cfg *config.Config, folder, ordinal, requestFilePath string)
 		writeRequestError(requestFilePath, ordinal, sessionName, payload.Brief, err.Error())
 		return
 	}
-	log.Printf("[%s][%s_cc][REQ] - timeout %s%s\n", sessionName, ordinal, timeout, briefSuffix(payload.Brief))
+	log.Printf("[%s][%s_cc][REQ]%s%s\n", sessionName, ordinal, briefSuffix(payload.Brief), timeoutTag(timeout, cfg.DefaultTimeoutMinutes))
 
 	conf, err := session.LoadSessionConf(folder)
 	if err != nil {
@@ -961,7 +972,7 @@ func processExecRequest(cfg *config.Config, folder, ordinal, execRequestFilePath
 		writeExecError(execRequestFilePath, ordinal, sessionName, payload.Brief, err.Error())
 		return
 	}
-	log.Printf("[%s][%s_exec][REQ] - timeout %s%s\n", sessionName, ordinal, timeout, briefSuffix(payload.Brief))
+	log.Printf("[%s][%s_exec][REQ]%s%s\n", sessionName, ordinal, briefSuffix(payload.Brief), timeoutTag(timeout, cfg.DefaultTimeoutMinutes))
 
 	conf, err := session.LoadSessionConf(folder)
 	if err != nil {

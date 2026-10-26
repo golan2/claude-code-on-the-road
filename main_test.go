@@ -118,3 +118,31 @@ func TestTimeoutParsing(t *testing.T) {
 		}
 	})
 }
+
+func TestTimeoutTag(t *testing.T) {
+	const defaultMinutes = 10
+
+	t.Run("when_equal_to_default_then_empty", func(t *testing.T) {
+		if got := timeoutTag(10*time.Minute, defaultMinutes); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("when_shorter_than_default_then_empty", func(t *testing.T) {
+		if got := timeoutTag(2*time.Minute, defaultMinutes); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("when_longer_than_default_then_tag_in_minutes", func(t *testing.T) {
+		if got, want := timeoutTag(30*time.Minute, defaultMinutes), " [TO=30min]"; got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("when_longer_and_fractional_then_fraction_kept", func(t *testing.T) {
+		if got, want := timeoutTag(90*time.Second+10*time.Minute, defaultMinutes), " [TO=11.5min]"; got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+}
