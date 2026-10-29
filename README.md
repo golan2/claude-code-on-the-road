@@ -1,4 +1,4 @@
-> **This README is for whoever is working on GoApp, not for PC.** PC's own instructions are in [instructions.md](instructions.md).
+> **This README is for whoever is working on GoApp, not for PC.** PC's own instructions are in the [_instructions](_instructions/) folder.
 
 # claude-code-on-the-road
 
@@ -12,7 +12,7 @@ A Go console app that bridges voice-command sessions from a phone to Claude Code
 - GoApp writes the result back as a matching numbered response file (`00001_cc_response.json`, ...) in the same folder, wrapped in its own envelope alongside Claude Code's raw JSON output.
 - PC reads the response file to continue the conversation.
 
-The full protocol — file schemas, session lifecycle, and every request type below — is specified in [instructions.md](instructions.md), which is also PC's own reference document (synced verbatim into the Drive root so PC can read it directly).
+The full protocol — file schemas, session lifecycle, and every request type below — is specified in [_instructions/instructions.md](_instructions/instructions.md) and the tool files next to it, which are also PC's own reference documents (synced into the `_instructions` folder in the Drive root so PC can read them directly; see "PC's instructions folder").
 
 ## Running GoApp
 
@@ -83,7 +83,7 @@ A session can be **no-CC**: bootstrapped entirely by exec-requests, never invoki
 
 ### `__session_conf.json`
 
-Every session folder that has ever run a regular request or a no-CC-bootstrapping exec-request gets a `__session_conf.json`, written and owned entirely by GoApp — PC never reads or writes it (`instructions.md` explicitly tells PC to never touch it). It holds the session's `workdir` (empty until a request carries one), its `permissionMode`, and the Claude Code `sessionId` to resume (empty for a no-CC session that hasn't invoked Claude Code yet). GoApp creates it when the first Claude Code or exec request is written into the folder.
+Every session folder that has ever run a regular request or a no-CC-bootstrapping exec-request gets a `__session_conf.json`, written and owned entirely by GoApp — PC has no need to read or write it. It holds the session's `workdir` (empty until a request carries one), its `permissionMode`, and the Claude Code `sessionId` to resume (empty for a no-CC session that hasn't invoked Claude Code yet). GoApp creates it when the first Claude Code or exec request is written into the folder.
 
 Any request type makes a folder a session and gets handled: GoApp scans for `_cc_request.json`, `_exec_request.json` and `_config_request.json` files alike, and no request needs a prior request or a `workdir` to be answered. Config requests never touch `__session_conf.json` at all.
 
@@ -93,7 +93,7 @@ A Claude Code request may carry `model` and `effort`. Both are optional and stic
 
 `models` in `config.json` is the list PC may choose from. Each entry has a `name` (what PC sends), an `id` (the full model id GoApp passes as `claude --model`, so the version is pinned here and only changes when the config does), a `grade` and a `useFor` sentence that tell PC what each model is for. PC reads the list with a config-request on key `models`. Names must be unique and every entry needs a name and an id, or startup fails. A `model` that isn't listed, or any `model` when the list is absent, gets an error response naming the allowed values. The stored value is the short name, so changing an `id` in the config takes effect on the next request.
 
-`effort` is one of `low`, `medium`, `high`, `xhigh` or `max`, passed as `claude --effort`. These are fixed by the CLI, so they are documented in `instructions.md` and not kept in config. Any other value gets an error response.
+`effort` is one of `low`, `medium`, `high`, `xhigh` or `max`, passed as `claude --effort`. These are fixed by the CLI, so they are documented in `_instructions/model-and-timeout.md` and not kept in config. Any other value gets an error response.
 
 ## Skills support
 
@@ -112,6 +112,16 @@ There is no skills setting on a request or a session. Skills are used by naming 
 GoApp spawns the `claude` CLI from an explicit absolute path, the required `claudePath` key in `config.json` (currently `/opt/homebrew/bin/claude`). There is no PATH lookup and no code-level default; startup fails fast if the key is missing, or the file doesn't exist or isn't executable, so a GoApp launched from an IDE or launcher with a minimal `PATH` can't fail later, mid-request.
 
 The subprocess inherits GoApp's environment with one override: `USER` is forced to the real OS account name. On macOS Claude Code finds its login credential in the keychain under the account named by `$USER`, so a `USER` that differs from the real account makes every request fail with `Not logged in · Please run /login`.
+
+## PC's instructions folder
+
+PC's instructions are several files, not one, so PC does not load every detail at once. `_instructions/instructions.md` is the main file: the rules, the relay overview, and a table naming the tool files, which PC opens only when a task needs them (`relay-details.md`, `continuity.md`, `shell.md`, and so on). The repo folder `_instructions/` is mirrored into `_instructions/` directly under the Drive root.
+
+At every start GoApp compares the version line, `<!-- version: N -->`, which must be the first line of `instructions.md`, with the Drive copy's. One version covers the whole folder. If the local version is higher, or Drive has none, GoApp replaces the folder: every `.md` file is written in place (only when its content differs, so Drive keeps each file's identity), and every file in the Drive folder that is no longer in the repo is deleted, so no dead files remain. `instructions.md` is written last, so an interrupted sync is simply redone at the next start. If the versions are equal or Drive's is higher, nothing is touched, so an old binary can never overwrite a newer folder. A sub-folder inside the Drive folder is reported and left alone. The log says what happened: `Synced instructions to Drive _instructions (version 41): wrote 11, removed 0 {...}`.
+
+**Maintainers:** bump the version line by 1 whenever any file in `_instructions/` changes, otherwise the change never reaches Drive. A test checks that every file the main file names exists.
+
+`_instructions` is a reserved folder name, like `_archived`: the session scan skips both by name, so neither is ever a session and the archiver never touches them. `bootstrap.md` (PC's entry point) points at the `_instructions` folder. GoApp no longer syncs a root-level `instructions.md`; an old copy left in the Drive root is stale and can be deleted.
 
 ## Archiver
 

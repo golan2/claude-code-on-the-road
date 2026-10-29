@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime/debug"
 	"slices"
 	"sort"
@@ -26,6 +24,7 @@ import (
 	"github.com/golan2/claude-code-on-the-road/internal/archiver"
 	"github.com/golan2/claude-code-on-the-road/internal/claudecode"
 	"github.com/golan2/claude-code-on-the-road/internal/config"
+	"github.com/golan2/claude-code-on-the-road/internal/instructions"
 	"github.com/golan2/claude-code-on-the-road/internal/response"
 	"github.com/golan2/claude-code-on-the-road/internal/session"
 	"github.com/golan2/claude-code-on-the-road/internal/shellexec"
@@ -138,7 +137,7 @@ func main() {
 	if err := startup.Write(startedAt); err != nil {
 		log.Printf("ERROR: %v", err)
 	}
-	syncInstructions(cfg.WatchFolder)
+	instructions.Sync(instructions.FolderName, cfg.WatchFolder, log.Printf)
 
 	inFlight := &inFlightSessions{processing: make(map[string]bool)}
 	inFlightExecs := &inFlightKeyed{processing: make(map[string]bool)}
@@ -199,137 +198,6 @@ func warnIfAnotherRunning(watchFolder string) {
 		command = command[:160] + "..."
 	}
 	log.Printf("WARNING: another GoApp may already be running: pid %d, started %s, command: %s", prev.PID, prev.StartedAt, command)
-}
-
-// instructionsFileName is used both for the local copy read from the repo
-// root (the working directory GoApp is run from, same convention as
-// config.Load("config.json")) and for the synced copy written into the
-// Drive root folder — never inside any session folder.
-const instructionsFileName = "instructions.md"
-
-// instructionsVersionPattern matches the "<!-- version: N -->" header that
-// must be the literal first line of the instructions file. GoApp only
-// overwrites the Drive copy when the local file's version is strictly
-// greater than the Drive copy's version, so a stale/old binary can never
-// clobber a newer instructions file already synced by a newer binary
-// running elsewhere. The version is plain content metadata maintained by
-// hand — whoever edits the file's content bumps this number by 1; there is
-// no build-time injection or separate version file.
-var instructionsVersionPattern = regexp.MustCompile(`^<!-- version: (\d+) -->`)
-
-// parseInstructionsVersion extracts the version number from the first line
-// of an instructions file's content. ok is false if the first line doesn't
-// match the expected header format.
-func parseInstructionsVersion(data []byte) (version int, ok bool) {
-	firstLine := data
-	if idx := bytes.IndexByte(data, '\n'); idx != -1 {
-		firstLine = data[:idx]
-	}
-	m := instructionsVersionPattern.FindSubmatch(firstLine)
-	if m == nil {
-		return 0, false
-	}
-	v, err := strconv.Atoi(string(m[1]))
-	if err != nil {
-		return 0, false
-	}
-	return v, true
-}
-
-// legacyInstructionsFileNames lists former Drive-root filenames for the
-// synced instructions file (instructions.md was previously named
-// "instructions"). GoApp has no Google Drive API integration — "Drive" here
-// is just a local folder that Google Drive Desktop mirrors in the
-// background, so a Drive file's identity is tied entirely to its local
-// path. A plain os.WriteFile to a path that has never existed before is
-// indistinguishable, from Drive Desktop's point of view, from adding a
-// brand-new unrelated file: it has no way to know "this is the same
-// document, just renamed" unless the rename actually happens as a rename()
-// on the local filesystem it's watching. migrateLegacyInstructionsFile
-// exists to make that real rename happen, so Drive preserves the existing
-// file's identity instead of GoApp accidentally creating an orphaned
-// duplicate. Whenever instructionsFileName changes again in the future,
-// prepend the previous name here so this migration keeps working.
-var legacyInstructionsFileNames = []string{"instructions"}
-
-// migrateLegacyInstructionsFile checks watchFolder for the instructions file
-// under any of its former names and, if found, performs a real os.Rename to
-// newPath (never a delete+create), so Google Drive Desktop's sync mirrors it
-// as a rename and preserves that file's existing Drive file ID.
-func migrateLegacyInstructionsFile(watchFolder, newPath string) {
-	for _, legacyName := range legacyInstructionsFileNames {
-		legacyPath := filepath.Join(watchFolder, legacyName)
-		if _, err := os.Stat(legacyPath); err != nil {
-			continue
-		}
-		if err := os.Rename(legacyPath, newPath); err != nil {
-			log.Printf("ERROR: %v", fmt.Errorf("migrate legacy instructions file %s to %s: %w", legacyPath, newPath, err))
-			continue
-		}
-		log.Printf("Migrated Drive instructions file from legacy name %q to %q, preserving its Drive file identity\n", legacyName, instructionsFileName)
-		return
-	}
-}
-
-// syncInstructions reads the local instructions file (relative path, same
-// cwd-relative convention config.Load("config.json") already uses) and
-// syncs its content into watchFolder/instructions.md — the Drive ROOT
-// folder, not any session folder. It always writes to that exact same path
-// via os.WriteFile (never removes and recreates it), so Google Drive
-// Desktop's sync preserves that file's Drive-side identity across restarts.
-// If the Drive copy doesn't exist yet at the current name but does exist
-// under a former name, it's migrated in place first (see
-// migrateLegacyInstructionsFile) rather than treated as a fresh create.
-//
-// On first-ever run (no Drive copy under the current or any legacy name),
-// it creates the file. On later runs, it only overwrites the existing Drive
-// copy if the local file's version header is strictly greater than the
-// Drive copy's — this is the guard against an accidentally-stale binary
-// clobbering a newer instructions file synced by a newer binary. If the
-// local file has no valid version header at all, the sync is skipped
-// entirely and a warning is logged, since there would be no safe way to
-// compare versions.
-func syncInstructions(watchFolder string) {
-	localData, err := os.ReadFile(instructionsFileName)
-	if err != nil {
-		log.Printf("ERROR: %v", fmt.Errorf("read local %s: %w", instructionsFileName, err))
-		return
-	}
-	localVersion, ok := parseInstructionsVersion(localData)
-	if !ok {
-		log.Printf("WARNING: local %s is missing a leading \"<!-- version: N -->\" header; skipping Drive sync\n", instructionsFileName)
-		return
-	}
-
-	drivePath := filepath.Join(watchFolder, instructionsFileName)
-	if _, err := os.Stat(drivePath); errors.Is(err, fs.ErrNotExist) {
-		migrateLegacyInstructionsFile(watchFolder, drivePath)
-	}
-
-	driveData, err := os.ReadFile(drivePath)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			log.Printf("ERROR: %v", fmt.Errorf("read drive %s: %w", instructionsFileName, err))
-			return
-		}
-		if err := os.WriteFile(drivePath, localData, 0o644); err != nil {
-			log.Printf("ERROR: %v", err)
-			return
-		}
-		log.Printf("Synced instructions to Drive root (created, version %d)\n", localVersion)
-		return
-	}
-
-	if driveVersion, ok := parseInstructionsVersion(driveData); ok && driveVersion >= localVersion {
-		log.Printf("Instructions in Drive root are already up to date (version %d)\n", driveVersion)
-		return
-	}
-
-	if err := os.WriteFile(drivePath, localData, 0o644); err != nil {
-		log.Printf("ERROR: %v", err)
-		return
-	}
-	log.Printf("Synced instructions to Drive root (updated to version %d)\n", localVersion)
 }
 
 // runSkillsCopy performs one skillscopy.Sync pass using cfg's skill settings.

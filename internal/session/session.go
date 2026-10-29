@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/golan2/claude-code-on-the-road/internal/instructions"
 )
 
 const sessionConfFileName = "__session_conf.json"
@@ -74,6 +76,13 @@ func SaveSessionConf(sessionFolderPath string, conf *SessionConf) error {
 	return nil
 }
 
+// isReservedFolder reports whether name is a folder directly under the watch
+// folder that is never a session: the archive and PC's instructions. They are
+// skipped by name, so a request file placed in one of them is never picked up.
+func isReservedFolder(name string) bool {
+	return name == archivedFolderName || name == instructions.FolderName
+}
+
 // DiscoverSessionFolders returns the absolute paths of the session folders in
 // root: its direct child directories that contain at least one request file
 // (see dirHasRequestFile). The scan is flat — nothing deeper than a direct
@@ -87,7 +96,7 @@ func DiscoverSessionFolders(root string) ([]string, error) {
 	}
 	var folders []string
 	for _, e := range entries {
-		if !e.IsDir() || e.Name() == archivedFolderName {
+		if !e.IsDir() || isReservedFolder(e.Name()) {
 			continue
 		}
 		path := filepath.Join(root, e.Name())
