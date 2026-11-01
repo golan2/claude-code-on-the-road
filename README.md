@@ -125,9 +125,9 @@ At every start GoApp compares the version line, `<!-- version: N -->`, which mus
 
 ## Archiver
 
-When `archiveAfterDays` is set in `config.json` (a positive number; absent or 0 turns it off, a negative number stops startup), GoApp archives idle sessions once at every start, before polling begins, so nothing is in flight. A session is idle when the newest modification time of its request, response and pid files is older than that many days. It is moved to `_archived/<name>`. An old unanswered request does not protect a folder. A folder whose name already exists in `_archived` is skipped and logged. When anything was archived GoApp logs one line, `archiver: archived N (idle > D days) {a,b,c}`.
+When `archiveAfterDays` is set in `config.json` (a positive number; absent or 0 turns it off, a negative number stops startup), GoApp archives idle sessions once at every start, before polling begins, so nothing is in flight. A session is idle when the newest modification time of its request, response and pid files is older than that many days. It is zipped to `_archived/<name>.zip` (entries under `<name>/`) and the folder is deleted once the zip is complete. An old unanswered request does not protect a folder. A session whose zip already exists is skipped and logged. The same pass also zips any plain folder found inside `_archived` (a session moved there by hand). When anything was archived GoApp logs one line, `archiver: archived N (idle > D days) {a,b,c}`, and one more, `archiver: zipped N unzipped folders in _archived {...}`, for the hand-moved ones.
 
-Drive Desktop may refresh file times on a re-sync, which can only make a folder look newer (not archived), never older. A folder moved back out of `_archived` keeps its old file times, so it is archived again at the next start unless a new request has arrived in it.
+Drive Desktop may refresh file times on a re-sync, which can only make a folder look newer (not archived), never older. A session unzipped back to the root keeps its old file times, so it is archived again at the next start unless a new request has arrived in it.
 
 ## Logging
 
