@@ -123,6 +123,19 @@ At every start GoApp compares the version line, `<!-- version: N -->`, which mus
 
 `_instructions` is a reserved folder name, like `_archived`: the session scan skips both by name, so neither is ever a session and the archiver never touches them. `bootstrap.md` (PC's entry point) points at the `_instructions` folder. GoApp no longer syncs a root-level `instructions.md`; an old copy left in the Drive root is stale and can be deleted.
 
+## Pre-flight checks
+
+`config.json` has an `environments` map, one entry per environment (`stg`, `prod`): `awsProfile` (required), `kubeContext` (optional, leave it out where kubectl is closed, as for PROD) and `frontegg` (true turns on the token check). The default AWS profile has no credentials, so every aws and kubectl command must pass these explicitly. PC reads the map with a config request for its own commands. `vpnCheckHost` (default `imugit.imubit.com`) is the host the VPN check calls.
+
+`NNNNN_check_request.json` with `{"env": "stg"}` runs the checks for that environment in parallel (30 seconds each) and is answered with `NNNNN_check_response.json`: an overall `status` (`pass`, `fail`, `timeout`), a ready-to-relay `report` (a header and one line per check, failures with their fix, and a failed `kube` marked as probably the VPN when the VPN check failed) and a result per check with `name`, `status`, `exitCode`, `output` and `fix`. The checks are:
+- `vpn`: `curl -sS -m 5 https://<vpnCheckHost>/api/v4/version` gets any HTTP response.
+- `aws-sso`: `aws sts get-caller-identity --profile P`.
+- `kube`: `kubectl --context C auth can-i get pods`, only when the environment has a `kubeContext`.
+- `frontegg`: only when the environment has `frontegg: true`. `~/.frontegg` (bare JWT, `{"token":...}` or an `Authorization: Bearer` line) holds a JWT whose `exp` is in the future.
+- `skill-scripts`: every `scripts/*.sh` under `skillPaths` is executable.
+
+An unknown `env` fails and lists the known ones. A check request cannot be cancelled.
+
 ## Archiver
 
 When `archiveAfterDays` is set in `config.json` (a positive number; absent or 0 turns it off, a negative number stops startup), GoApp archives idle sessions once at every start, before polling begins, so nothing is in flight. A session is idle when the newest modification time of its request, response and pid files is older than that many days. It is zipped to `_archived/<name>.zip` (entries under `<name>/`) and the folder is deleted once the zip is complete. An old unanswered request does not protect a folder. A session whose zip already exists is skipped and logged. The same pass also zips any plain folder found inside `_archived` (a session moved there by hand). When anything was archived GoApp logs one line, `archiver: archived N (idle > D days) {a,b,c}`, and one more, `archiver: zipped N unzipped folders in _archived {...}`, for the hand-moved ones.

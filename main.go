@@ -308,6 +308,22 @@ func pollOnce(cfg *config.Config, inFlight *inFlightSessions, inFlightExecs, inF
 			}
 		}
 
+		checkRequests, err := session.PendingCheckRequests(folder)
+		if err != nil {
+			log.Printf("ERROR: %v", err)
+		}
+		for _, req := range checkRequests {
+			key := execConfigKey(folder, req.Ordinal) + "_check"
+			if !inFlightExecs.tryMark(key) {
+				continue
+			}
+			go func(folder, ordinal, path string) {
+				defer recoverPanic(fmt.Sprintf("processCheckRequest[%s][check_%s]", filepath.Base(folder), ordinal))
+				defer inFlightExecs.unmark(key)
+				processCheckRequest(cfg, folder, ordinal, path)
+			}(folder, req.Ordinal, req.Path)
+		}
+
 		execRequests, err := session.PendingExecRequests(folder)
 		if err != nil {
 			log.Printf("ERROR: %v", err)
@@ -675,6 +691,9 @@ func processCancelRequest(folder, ordinal string) {
 // (a Claude Code request's process, or an exec request's shell). It refuses once the request has a cc_response, since by then
 // the PID may already belong to an unrelated process.
 func cancelClaudeCode(folder, ordinal string) cancelResponse {
+	if _, err := os.Stat(filepath.Join(folder, ordinal+"_check_request.json")); err == nil {
+		return cancelResponse{Status: "error", Message: "check requests cannot be cancelled"}
+	}
 	// Ordinals are unique across request types, so the ordinal identifies
 	// either a Claude Code request or an exec request.
 	responsePath := session.CCResponsePathFor(folder, ordinal)

@@ -4,6 +4,8 @@
 1. TeamPlan repo with jira-team-plan skill auto-fetch (blocked on name decision)
 2. Document/extract skills-copy sync feature for team use
 3. every time the scanner runs it should update the [goapp_started.json] file with heartbeat field with current time (same format as startedAt).
+4. Never switch model without my permission
+5. Go over all the instructions and see what can be converted to a script to make the MD shorter and less cumbersome
 
 ## Done
 - Process cancellation: PID file and cancel request kill Claude Code process group

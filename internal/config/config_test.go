@@ -36,6 +36,39 @@ func writeConfig(t *testing.T, extra map[string]any) string {
 	return path
 }
 
+func TestConfig_Environments(t *testing.T) {
+	stg := Environment{AwsProfile: "imu-stage", KubeContext: "is"}
+	t.Run("when_environment_complete_then_loads", func(t *testing.T) {
+		cfg, err := Load(writeConfig(t, map[string]any{"environments": map[string]Environment{"stg": stg}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Environments["stg"] != stg {
+			t.Fatalf("environments = %+v", cfg.Environments)
+		}
+	})
+	t.Run("when_environment_has_no_kube_context_then_loads", func(t *testing.T) {
+		if _, err := Load(writeConfig(t, map[string]any{"environments": map[string]Environment{"prod": {AwsProfile: "ip", Frontegg: true}}})); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("when_environment_missing_aws_profile_then_load_fails", func(t *testing.T) {
+		_, err := Load(writeConfig(t, map[string]any{"environments": map[string]Environment{"stg": {KubeContext: "ips"}}}))
+		if err == nil || !strings.Contains(err.Error(), "awsProfile") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("when_vpn_host_absent_then_defaults", func(t *testing.T) {
+		cfg, err := Load(writeConfig(t, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.VpnCheckHost != "imugit.imubit.com" {
+			t.Fatalf("vpnCheckHost = %q", cfg.VpnCheckHost)
+		}
+	})
+}
+
 func TestLoadTimeout(t *testing.T) {
 	t.Run("when_only_timeoutMinutes_then_falls_back_and_warns", func(t *testing.T) {
 		cfg, err := Load(writeConfig(t, map[string]any{"timeoutMinutes": 7}))

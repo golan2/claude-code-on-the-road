@@ -31,10 +31,11 @@ var (
 	// backward compatibility with sessions and clients that predate the rename.
 	requestFilePattern       = regexp.MustCompile(`^(\d{5})_(?:cc_)?request\.json$`)
 	statusRequestFilePattern = regexp.MustCompile(`^(\d{5})_status_request_(\d{3})\.json$`)
+	checkRequestFilePattern  = regexp.MustCompile(`^(\d{5})_check_request\.json$`)
 	execRequestFilePattern   = regexp.MustCompile(`^(\d{5})_exec_request\.json$`)
 	configRequestFilePattern = regexp.MustCompile(`^(\d{5})_config_request\.json$`)
 	cancelRequestFilePattern = regexp.MustCompile(`^(\d{5})_cancel_request\.json$`)
-	activityFilePattern      = regexp.MustCompile(`^\d{5}_(request|cc_request|response|cc_response|pid|ack|exec_request|exec_response|config_request|config_response|cancel_request|cancel_response|status_request_\d{3}|status_response_\d{3})\.json$`)
+	activityFilePattern      = regexp.MustCompile(`^\d{5}_(request|cc_request|response|cc_response|pid|ack|check_request|check_response|exec_request|exec_response|config_request|config_response|cancel_request|cancel_response|status_request_\d{3}|status_response_\d{3})\.json$`)
 )
 
 // SessionConf holds the per-session metadata stored in __session_conf.json.
@@ -124,7 +125,7 @@ func dirHasRequestFile(dir string) (bool, error) {
 			continue
 		}
 		name := e.Name()
-		if requestFilePattern.MatchString(name) ||
+		if requestFilePattern.MatchString(name) || checkRequestFilePattern.MatchString(name) ||
 			execRequestFilePattern.MatchString(name) ||
 			configRequestFilePattern.MatchString(name) {
 			return true, nil
@@ -393,6 +394,41 @@ func ConfigResponsePathFor(configRequestFilePath string) string {
 		return configRequestFilePath
 	}
 	return filepath.Join(dir, m[1]+"_config_response.json")
+}
+
+type PendingCheckRequest struct {
+	Ordinal string
+	Path    string
+}
+
+func PendingCheckRequests(folder string) ([]PendingCheckRequest, error) {
+	entries, err := os.ReadDir(folder)
+	if err != nil {
+		return nil, fmt.Errorf("read session folder %s: %w", folder, err)
+	}
+	var pending []PendingCheckRequest
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		m := checkRequestFilePattern.FindStringSubmatch(entry.Name())
+		if m == nil {
+			continue
+		}
+		path := filepath.Join(folder, entry.Name())
+		if _, err := os.Stat(CheckResponsePathFor(path)); errors.Is(err, fs.ErrNotExist) {
+			pending = append(pending, PendingCheckRequest{Ordinal: m[1], Path: path})
+		}
+	}
+	return pending, nil
+}
+
+func CheckResponsePathFor(path string) string {
+	m := checkRequestFilePattern.FindStringSubmatch(filepath.Base(path))
+	if m == nil {
+		return path
+	}
+	return filepath.Join(filepath.Dir(path), m[1]+"_check_response.json")
 }
 
 // StatusRequestCounters returns all status-request counters for the given ordinal

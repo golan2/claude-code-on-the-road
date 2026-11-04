@@ -44,8 +44,9 @@ var disableModelInvocationPattern = regexp.MustCompile(`(?m)^disable-model-invoc
 // fileState is what Sync remembers about one previously-copied source file,
 // keyed by that file's absolute source path in state.Files.
 type fileState struct {
-	SourceModTimeUnixNano int64  `json:"sourceModTimeUnixNano"`
-	DestPath              string `json:"destPath"`
+	SourceModTimeUnixNano int64       `json:"sourceModTimeUnixNano"`
+	DestPath              string      `json:"destPath"`
+	Mode                  fs.FileMode `json:"mode"`
 }
 
 // state is the on-disk shape of skills_state.json, GoApp's baseline for
@@ -126,7 +127,7 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 				modNano := info.ModTime().UnixNano()
 
 				destMissing := false
-				if existing, ok := st.Files[srcFile]; ok && existing.SourceModTimeUnixNano == modNano && existing.DestPath == destFile {
+				if existing, ok := st.Files[srcFile]; ok && existing.SourceModTimeUnixNano == modNano && existing.DestPath == destFile && existing.Mode == info.Mode().Perm() {
 					// The state entry says this copy is current, but the copy may have been
 					// deleted since (e.g. by tmp cleanup), so only skip when it is still there.
 					if _, err := os.Stat(destFile); err == nil {
@@ -141,7 +142,7 @@ func Sync(cfg Config, logf func(format string, args ...any)) error {
 					failed++
 					return nil
 				}
-				st.Files[srcFile] = fileState{SourceModTimeUnixNano: modNano, DestPath: destFile}
+				st.Files[srcFile] = fileState{SourceModTimeUnixNano: modNano, DestPath: destFile, Mode: info.Mode().Perm()}
 				if destMissing {
 					restored++
 					restoredNames = append(restoredNames, filepath.ToSlash(filepath.Join(destName, relFile)))
@@ -301,6 +302,10 @@ func discoverSkillDirs(root string) ([]string, error) {
 // disable-model-invocation is unconditionally rewritten to false in the
 // copy's content before it's written.
 func copyOneFile(srcFile, destFile string, stripManifest bool) error {
+	info, err := os.Stat(srcFile)
+	if err != nil {
+		return fmt.Errorf("stat: %w", err)
+	}
 	content, err := os.ReadFile(srcFile)
 	if err != nil {
 		return fmt.Errorf("read: %w", err)
@@ -314,8 +319,12 @@ func copyOneFile(srcFile, destFile string, stripManifest bool) error {
 	}
 
 	tmp := destFile + ".tmp-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	if err := os.WriteFile(tmp, content, 0o644); err != nil {
+	if err := os.WriteFile(tmp, content, info.Mode().Perm()); err != nil {
 		return fmt.Errorf("write temp: %w", err)
+	}
+	if err := os.Chmod(tmp, info.Mode().Perm()); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("chmod temp: %w", err)
 	}
 	if err := os.Rename(tmp, destFile); err != nil {
 		_ = os.Remove(tmp)

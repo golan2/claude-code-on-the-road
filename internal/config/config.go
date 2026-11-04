@@ -11,6 +11,7 @@ import (
 
 const (
 	defaultPollIntervalSeconds       = 5
+	defaultVpnCheckHost              = "imugit.imubit.com"
 	defaultTimeoutMinutes            = 10
 	defaultPermissionMode            = "bypassPermissions"
 	defaultMaxConcurrentSessions     = 10
@@ -79,6 +80,13 @@ type SimpleRepository struct {
 //   - Models: the models PC may select per session with the "model" request field, read by PC with a
 //     config-request on key "models". Absent means no model can be selected and requests use claude's
 //     own default. Names must be unique and every entry needs a name and an id.
+//   - Environments: per environment ("stg", "prod"), the awsProfile and kubeContext. A check request
+//     runs the pre-flight checks for one of them, and PC reads them with a config-request on key
+//     "environments" to pass --profile/--context on its own aws and kubectl commands. Absent means
+//     no environment can be checked. Every entry needs awsProfile; kubeContext is optional (no kube
+//     check, and PC must not run kubectl there) and frontegg turns on the ~/.frontegg token check.
+//   - VpnCheckHost: host whose HTTPS API the VPN check calls; it is reachable only on the VPN.
+//     Defaults to imugit.imubit.com.
 //   - SkillsCopyIntervalSeconds: how often, in seconds, GoApp re-scans SkillPaths for changed or
 //     deleted skill files and re-copies/cleans up accordingly. Defaults to 300 (5 minutes).
 type Config struct {
@@ -97,9 +105,23 @@ type Config struct {
 	ClaudePath                string             `json:"claudePath"`
 	ArchiveAfterDays          int                `json:"archiveAfterDays"`
 	Models                    []Model            `json:"models"`
+	VpnCheckHost              string             `json:"vpnCheckHost"`
+	// Environments maps an environment name (stg, prod) to its AWS profile and kube context.
+	Environments map[string]Environment `json:"environments"`
 	// Warnings are notices produced by Load, such as a deprecated key. They are
 	// not config.json keys, so they are excluded from config-requests.
 	Warnings []string `json:"-"`
+}
+
+// Environment is what the pre-flight check and PC's own aws/kubectl commands
+// need for one environment (STG, PROD): the AWS profile and kube context to
+// pass explicitly, because the default profile has no credentials.
+// KubeContext is optional: an environment closed to kubectl (PROD) leaves it
+// out and gets no kube check. Frontegg turns on the ~/.frontegg token check.
+type Environment struct {
+	AwsProfile  string `json:"awsProfile"`
+	KubeContext string `json:"kubeContext,omitempty"`
+	Frontegg    bool   `json:"frontegg,omitempty"`
 }
 
 // legacyFile is what Load decodes the config file into: Config, plus the
@@ -154,6 +176,9 @@ func applyTimeoutFallback(cfg *Config, legacy *int) {
 }
 
 func applyDefaults(cfg *Config) {
+	if cfg.VpnCheckHost == "" {
+		cfg.VpnCheckHost = defaultVpnCheckHost
+	}
 	if cfg.PollIntervalSeconds == 0 {
 		cfg.PollIntervalSeconds = defaultPollIntervalSeconds
 	}
@@ -230,6 +255,12 @@ func validate(cfg *Config) error {
 
 	if cfg.ArchiveAfterDays < 0 {
 		return fmt.Errorf("archiveAfterDays must not be negative (got %d); use 0 or omit it to turn archiving off", cfg.ArchiveAfterDays)
+	}
+
+	for name, env := range cfg.Environments {
+		if name == "" || env.AwsProfile == "" {
+			return fmt.Errorf("environments[%q] needs an awsProfile", name)
+		}
 	}
 
 	seenModels := make(map[string]bool)

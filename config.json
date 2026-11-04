@@ -12,6 +12,11 @@
   "skillsCopyDir": "/tmp/ccotr-skills",
   "claudePath": "/opt/homebrew/bin/claude",
   "archiveAfterDays": 30,
+  "vpnCheckHost": "imugit.imubit.com",
+  "environments": {
+    "stg":  { "awsProfile": "imu-stage", "kubeContext": "ips" },
+    "prod": { "awsProfile": "ip", "frontegg": true }
+  },
   "models": [
     { "name": "fable",  "id": "claude-fable-5-1",          "grade": "most capable", "useFor": "the hardest problems: deep architecture, long multi-step investigations" },
     { "name": "opus",   "id": "claude-opus-5-5",           "grade": "high",         "useFor": "complex coding, debugging and design work" },

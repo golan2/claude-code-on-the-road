@@ -11,9 +11,11 @@ import (
 
 // InvokeParams holds the parameters for invoking a shell command.
 type InvokeParams struct {
-	Command    string
-	Workdir    string
-	Timeout    time.Duration
+	Command string
+	Workdir string
+	Timeout time.Duration
+	// WaitDelay prevents a grandchild holding stdout open from delaying the timeout response.
+	WaitDelay  time.Duration
 	OnLaunched func(pid int) // called synchronously the moment cmd.Start() succeeds, with the shell's PID (also its process group ID)
 }
 
@@ -37,6 +39,11 @@ func Invoke(params InvokeParams) (*InvokeResult, error) {
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", params.Command)
 	cmd.Dir = params.Workdir
+	cmd.WaitDelay = params.WaitDelay
+	cmd.Cancel = func() error {
+		killProcessGroup(cmd)
+		return nil
+	}
 
 	// Put the child in its own process group so we can kill the whole tree on
 	// timeout (the shell may spawn subprocesses for pipelines, globs, etc.).
